@@ -250,6 +250,8 @@ return {
 * `gg <模块> --help` 看自动生成的用法。
 * `gg edit <模块>` 保存前会自动做语法检查并定位错误行。
 * 非交互场景：`GG_PLAIN=1 gg ls --json`、`GG_PLAIN=1 gg mymod arg1`。
+  非交互时菜单返回 `nil`（等于取消）、表单返回默认值、`ctx.confirm` 默认返回真 —— 想强制拒绝
+  就设 `GG_ASSUME_YES=0`。
 * 模块报错会打印带行号的 Lua traceback。
 * 开发时用 `tools/ggshot.py` 在伪终端里给 TUI 截图：
 

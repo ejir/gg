@@ -313,7 +313,7 @@ $ ls -l bin/gg
 git clone https://github.com/ejir/gg && cd gg
 
 make host            # 用本机 cc 编译（快速迭代、跑测试）
-make test            # 52 项无头测试 + 17 项伪终端 TUI 测试
+make test            # 54 项无头测试 + 20 项伪终端 TUI 测试
 make ape             # 需要 cosmocc → 产出 bin/gg、bin/gg.exe、bin/gg.com
 make install         # 装到 ~/.gg/bin 并执行 gg active
 ```
@@ -358,8 +358,9 @@ Cosmopolitan 提供了 Bourne 风格的命令解释器）。
 优先级是：内置命令 → 模块 → 注册命令 → `PATH`。想强制走系统程序用 `gg run <命令行>` 或 `gg exec <程序>`。
 
 **TUI 在管道/CI 里会坏吗？**
-不会。检测到非终端（`GG_PLAIN=1`、`TERM=dumb`、重定向）时，菜单变成编号列表、表单用默认值、
-`gg ls --json` 输出机器可读的 JSON。
+不会。检测到非终端（`GG_PLAIN=1`、`TERM=dumb`、重定向）时，菜单变成编号列表（取消返回 `nil`）、
+表单直接用默认值、`gg ls --json` 输出机器可读的 JSON。管道里的 `ctx.confirm("删除吗？")` 默认按
+"是" 处理，好让无人值守的脚本跑下去；把 `GG_ASSUME_YES=0` 设上就一律拒绝。
 
 **怎么更新？**
 `gg upgrade`（从 releases 下载并原子替换自己；Windows 上先改名旧文件再落新文件）。

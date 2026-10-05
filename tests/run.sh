@@ -57,6 +57,8 @@ check "platform table"     "linux"             "$GG" -e 'print(gg.platform.os)'
 check "shell quote"        "a b"               "$GG" -e 'print(gg.str.quote("a b"))'
 check "capture"            "hello"             "$GG" -e 'print(gg.capture("echo hello"))'
 check "split/join"         "a,b,c"             "$GG" -e 'print(table.concat(gg.str.split("a b c"), ","))'
+check "tui.form fields"    "u 16 true b"       "$GG" -e 'local f=gg.tui.form({title="t",fields={{name="url",label="U",kind="text",default="u"},{name="jobs",label="J",kind="text",default=16},{name="yes",label="Y",kind="bool",default=true},{name="pick",label="P",kind="choice",choices={"a","b"},default="b"}}}); print(f.url.." "..f.jobs.." "..tostring(f.yes).." "..f.pick)'
+check "tui.menu cancel"    "nil"               "$GG" -e 'print(tostring(gg.tui.menu({title="t",items={"a","b"}})))'
 
 echo
 echo "modules"

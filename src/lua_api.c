@@ -1323,6 +1323,12 @@ static int ltui_menu(lua_State *l) {
   return 2;
 }
 
+/* booleans are common as `default = true`, treat them as "1"/"0" */
+static const char *lua_to_str(lua_State *l, int idx) {
+  if (lua_isboolean(l, idx)) return lua_toboolean(l, idx) ? "1" : "0";
+  return lua_tostring(l, idx);
+}
+
 static int ltui_form(lua_State *l) {
   luaL_checktype(l, 1, LUA_TTABLE);
   lua_getfield(l, 1, "fields");
@@ -1330,21 +1336,32 @@ static int ltui_form(lua_State *l) {
   int n = (int)lua_rawlen(l, -1);
   tui_field *f = calloc((size_t)(n + 1), sizeof(tui_field));
   for (int i = 1; i <= n; i++) {
-    lua_rawgeti(l, -1, i);
-    lua_getfield(l, -1, "name");
+    lua_rawgeti(l, -1, i); /* the field descriptor table */
+    int ft = lua_gettop(l);
+    if (!lua_istable(l, ft)) {
+      lua_pop(l, 1);
+      continue;
+    }
+    /* every lookup happens on `ft` and leaves the stack exactly as it was */
+    lua_getfield(l, ft, "name");
     f[i - 1].name = gg_strdup(lua_tostring(l, -1) ? lua_tostring(l, -1) : "");
-    lua_getfield(l, -2, "label");
+    lua_pop(l, 1);
+    lua_getfield(l, ft, "label");
     f[i - 1].label = gg_strdup(lua_tostring(l, -1) ? lua_tostring(l, -1) : "");
-    lua_getfield(l, -2, "help");
+    lua_pop(l, 1);
+    lua_getfield(l, ft, "help");
     f[i - 1].help = gg_strdup(lua_tostring(l, -1) ? lua_tostring(l, -1) : "");
-    lua_getfield(l, -2, "default");
-    f[i - 1].value = gg_strdup(lua_tostring(l, -1) ? lua_tostring(l, -1) : "");
-    lua_getfield(l, -2, "kind");
-    const char *kind = lua_tostring(l, -1);
+    lua_pop(l, 1);
+    lua_getfield(l, ft, "default");
+    f[i - 1].value = gg_strdup(lua_to_str(l, -1) ? lua_to_str(l, -1) : "");
+    lua_pop(l, 1);
+    lua_getfield(l, ft, "kind");
+    const char *kind = lua_to_str(l, -1);
     f[i - 1].kind = kind && gg_streq(kind, "bool") ? 1
                     : (kind && gg_streq(kind, "choice")) ? 2
                                                          : 0;
-    lua_getfield(l, -2, "choices");
+    lua_pop(l, 1);
+    lua_getfield(l, ft, "choices");
     if (lua_istable(l, -1)) {
       int cn = (int)lua_rawlen(l, -1);
       f[i - 1].choices = malloc(sizeof(char *) * (size_t)(cn + 1));
@@ -1356,9 +1373,7 @@ static int ltui_form(lua_State *l) {
       }
       f[i - 1].nchoices = cn;
     }
-    lua_pop(l, 5); /* choices, kind, default, help, label */
-    lua_getfield(l, -1, "name");
-    lua_pop(l, 2); /* value copy of name, field table */
+    lua_pop(l, 2); /* choices, field descriptor */
   }
   lua_getfield(l, 1, "title");
   const char *title = lua_tostring(l, -1);

@@ -203,6 +203,19 @@ def test_progress(env):
     s.close()
 
 
+def test_module_tui_form(env):
+    print("\nmodule tui form (tty)")
+    s = Session([GG, "aria2c"], env=env)
+    out = s.drain(1.2)
+    check("module menu opens", "new download" in out, out)
+    out = s.send("\r", wait=1.2)  # pick "new download" -> the lua form
+    check("lua form renders its fields", "URL" in out and "insecure" in out, out)
+    out = s.send("\x1b", wait=0.6)  # esc -> back to the module menu
+    check("esc returns to the menu", "new download" in out, out)
+    s.send("q", wait=0.3)
+    s.close()
+
+
 def test_active_tui(env):
     print("\nactive (tty)")
     s = Session([GG, "active"], env=env)
@@ -235,6 +248,7 @@ def main():
     test_module_form(env)
     test_form_and_back(env)
     test_progress(env)
+    test_module_tui_form(env)
     test_active_tui(env)
     test_editor(env)
     print(f"\n  \033[1m{passed} passed, {failed} failed\033[0m")
