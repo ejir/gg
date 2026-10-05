@@ -144,6 +144,17 @@ LUA
 printf 'asset-payload' > "$BUNDLE/assets/greeting.txt"
 printf 'print("bundle init ran")\n' > "$BUNDLE/init.lua"
 printf 'quick\techo BUNDLED-OK\tbundled one liner\n' > "$BUNDLE/registry.tsv"
+# a bundled module shadows a built-in with the same name
+cat > "$BUNDLE/hello.lua" <<'LUA'
+local M = {}
+M.title = "hello (from the bundle)"
+M.params = { { name = "who", pos = 1, type = "string", default = "x" } }
+function M.run(ctx)
+  print("BUNDLED-HELLO " .. tostring(ctx.args.who))
+  return 0
+end
+return M
+LUA
 check "bundle writes"      "wrote"          "$GG" bundle "$BUNDLE/app.gg" "$BUNDLE/tool.lua" "$BUNDLE/assets" "$BUNDLE/init.lua" "$BUNDLE/registry.tsv"
 check "bundle carries"     "modules/tool.lua" "$GG" bundle "$BUNDLE/again.gg" -f "$BUNDLE/tool.lua"
 check "bundled module runs" "hi ada: asset-payload"  run_any "$BUNDLE/app.gg" tool ada
@@ -158,6 +169,12 @@ check "rm: drops entries"  "no extra files"   run_any "$BUNDLE/app.gg" bundle "$
 check "dropped asset gone" "nil"              run_any "$BUNDLE/lean.gg" -e 'print(tostring(gg.assets.read("greeting.txt")))'
 check "still-bundled module in lean" "hi bob: no asset" run_any "$BUNDLE/lean.gg" tool bob
 check "bundle help"        "self-contained scripts" "$GG" help bundle
+check "bundle shadows built-in" "wrote"      "$GG" bundle "$BUNDLE/shadow.gg" "$BUNDLE/hello.lua"
+check "shadowed module wins" "BUNDLED-HELLO ada" run_any "$BUNDLE/shadow.gg" hello ada
+mkdir -p "$GG_DIR/modules"
+printf 'local M={}\nM.params={{name="a",pos=1,type="string",default="b"}}\nfunction M.run() print("USER-WINS") return 0 end\nreturn M\n' > "$GG_DIR/modules/hello.lua"
+check "user file beats bundle" "USER-WINS"    run_any "$BUNDLE/shadow.gg" hello
+rm -f "$GG_DIR/modules/hello.lua"
 
 echo
 echo "scaffolding"

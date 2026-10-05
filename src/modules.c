@@ -185,30 +185,24 @@ const char *gg_embedded_lookup(const char *name, unsigned int *len) {
   return 0;
 }
 
-/* the lua text of a module: built-in, bundled or on disk.
- * kind: 0 = built-in, 1 = bundled, 2 = file (and *path gets the file) */
+/* the lua text of a module, honouring where this entry came from:
+ * a user file wins over a bundled one, which wins over the built-in.
+ * kind: 0 = built-in, 1 = bundled, 2 = file on disk */
 char *module_source_text(const char *name, size_t *lenp, int *kind) {
   module_info *m = modules_find(name);
   if (!m) return 0;
   if (lenp) *lenp = 0;
-  char key[256];
-  unsigned int slen = 0;
-  snprintf(key, sizeof(key), "mod_%s.lua", name);
-  const char *src = gg_embedded_lookup(key, &slen);
-  if (src) {
-    if (kind) *kind = 0;
-    if (lenp) *lenp = slen;
-    return gg_strndup(src, slen);
-  }
+  if (kind) *kind = 0;
   if (m->bundled) {
+    char key[512];
     snprintf(key, sizeof(key), "modules/%s.lua", name);
     size_t blen = 0;
     char *text = bundle_read(key, &blen);
     if (text) {
       if (kind) *kind = 1;
       if (lenp) *lenp = blen;
+      return text;
     }
-    return text;
   }
   if (m->path && gg_is_file(m->path)) {
     size_t flen = 0;
@@ -216,10 +210,16 @@ char *module_source_text(const char *name, size_t *lenp, int *kind) {
     if (text) {
       if (kind) *kind = 2;
       if (lenp) *lenp = flen;
+      return text;
     }
-    return text;
   }
-  return 0;
+  char key[256];
+  unsigned int slen = 0;
+  snprintf(key, sizeof(key), "mod_%s.lua", name);
+  const char *src = gg_embedded_lookup(key, &slen);
+  if (!src) return 0;
+  if (lenp) *lenp = slen;
+  return gg_strndup(src, slen);
 }
 
 char *module_path_of(const char *name) {

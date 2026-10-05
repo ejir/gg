@@ -360,7 +360,7 @@ bar:done(true, "完成")
 
 ```sh
 $ ls -l bin/gg
--rwxr-xr-x 1 user user 1526541 bin/gg   # ≈1.5 MB：Lua 5.4 + TUI + 示例模块全在里面
+-rwxr-xr-x 1 user user 1526554 bin/gg   # ≈1.5 MB：Lua 5.4 + TUI + 示例模块全在里面
 ```
 
 ---
@@ -371,7 +371,7 @@ $ ls -l bin/gg
 git clone https://github.com/ejir/gg && cd gg
 
 make host            # 用本机 cc 编译（快速迭代、跑测试）
-make test            # 67 项无头测试 + 21 项伪终端 TUI 测试
+make test            # 70 项无头测试 + 21 项伪终端 TUI 测试
 make ape             # 需要 cosmocc → 产出 bin/gg、bin/gg.exe、bin/gg.com
 make install         # 装到 ~/.gg/bin 并执行 gg active
 ```

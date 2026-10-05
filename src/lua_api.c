@@ -2391,7 +2391,11 @@ int lua_run_module(const char *name, int argc, char **argv, int force_tui) {
     gg_error("%s: %s", name, gg_tr("no such module", "没有这个模块"));
     return 1;
   }
-  char *path = m->path ? gg_strdup(m->path) : module_path_of(name);
+  /* an on-disk path is only interesting for the chunk name: running a
+   * built-in or bundled module should not litter ~/.gg/modules (that is
+   * what `gg edit`/`gg show` are for), otherwise the first run would
+   * shadow the bundle with a copy of itself. */
+  char *path = (m->path && !m->bundled) ? gg_strdup(m->path) : 0;
   char chunkname[512];
   size_t srclen = 0;
   int kind = 0;
