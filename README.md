@@ -313,7 +313,7 @@ $ ls -l bin/gg
 git clone https://github.com/ejir/gg && cd gg
 
 make host            # 用本机 cc 编译（快速迭代、跑测试）
-make test            # 48 项无头测试 + 17 项伪终端 TUI 测试
+make test            # 52 项无头测试 + 17 项伪终端 TUI 测试
 make ape             # 需要 cosmocc → 产出 bin/gg、bin/gg.exe、bin/gg.com
 make install         # 装到 ~/.gg/bin 并执行 gg active
 ```

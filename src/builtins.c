@@ -97,35 +97,48 @@ static void active_files(const char *shell, strvec *out) {
   free(bashrc);
 }
 
+/* The snippet normally says $HOME/.gg/bin so it survives copying the rc file
+ * to another machine; with a custom GG_DIR we have to spell the real path. */
+static int bin_is_default(void) {
+  char expect[PATH_MAX];
+  snprintf(expect, sizeof(expect), "%s/%s/bin", gg_home(), GG_DIR_NAME);
+  return gg_streq(gg_bin_dir(), expect);
+}
+
 static char *active_block(const char *shell) {
   sbuf b;
   sb_init(&b, 256);
+  const char *bin = gg_bin_dir();
+  int dflt = bin_is_default();
+  int spaced = strchr(bin, ' ') != 0;
+  char qbin[PATH_MAX + 8]; /* the real path, shell-quoted when needed */
+  snprintf(qbin, sizeof(qbin), "%s%s%s", spaced ? "'" : "", bin,
+           spaced ? "'" : "");
+  const char *p = dflt ? "$HOME/.gg/bin" : qbin;
+  sb_addf(&b, "%s\n", BLOCK_BEGIN);
+  sb_adds(&b, "# added by `gg active` — remove with `gg active off`\n");
   if (gg_streq(shell, "fish")) {
-    sb_addf(&b, "%s\n", BLOCK_BEGIN);
-    sb_adds(&b, "# added by `gg active` — remove with `gg active off`\n");
-    sb_adds(&b, "if not contains $HOME/.gg/bin $PATH\n");
-    sb_adds(&b, "    set -gx PATH $HOME/.gg/bin $PATH\n");
+    sb_addf(&b, "if not contains %s $PATH\n", p);
+    sb_addf(&b, "    set -gx PATH %s $PATH\n", p);
     sb_adds(&b, "end\n");
-    sb_addf(&b, "%s\n", BLOCK_END);
   } else if (gg_streq(shell, "powershell")) {
-    sb_addf(&b, "%s\n", BLOCK_BEGIN);
-    sb_adds(&b, "# added by `gg active` — remove with `gg active off`\n");
+    if (dflt)
+      sb_adds(&b, "$ggbin = Join-Path $env:USERPROFILE '.gg\\bin'\n");
+    else
+      sb_addf(&b, "$ggbin = '%s'\n", bin);
     sb_adds(&b,
-            "$ggbin = Join-Path $env:USERPROFILE '.gg\\bin'\n"
             "if (Test-Path $ggbin) { if ($env:PATH -notlike \"*$ggbin*\") "
             "{ $env:PATH = \"$ggbin;$env:PATH\" } }\n");
-    sb_addf(&b, "%s\n", BLOCK_END);
   } else {
-    sb_addf(&b, "%s\n", BLOCK_BEGIN);
-    sb_adds(&b, "# added by `gg active` — remove with `gg active off`\n");
-    sb_adds(&b,
+    sb_addf(&b,
             "case \":$PATH:\" in\n"
-            "  *\":$HOME/.gg/bin:\"*) ;;\n"
-            "  *) PATH=\"$HOME/.gg/bin:$PATH\" ;;\n"
+            "  *\":%s:\"*) ;;\n"
+            "  *) PATH=\"%s:$PATH\" ;;\n"
             "esac\n"
-            "export PATH\n");
-    sb_addf(&b, "%s\n", BLOCK_END);
+            "export PATH\n",
+            p, p);
   }
+  sb_addf(&b, "%s\n", BLOCK_END);
   return b.p;
 }
 
@@ -257,18 +270,41 @@ static int active_off(const char *shell) {
   return 0;
 }
 
+static void active_usage(void) {
+  printf("%s\n", gg_tr("usage: gg active [shell] [status|off|print]\n"
+                        "  gg active           wire ~/.gg/bin into PATH (shell auto-detected)\n"
+                        "  gg active status    show what is enabled\n"
+                        "  gg active off       remove the block again\n"
+                        "  gg active print     print the snippet instead of writing it\n"
+                        "  gg active zsh       force a shell (bash/zsh/fish/powershell/cmd)",
+                        "用法: gg active [shell] [status|off|print]\n"
+                        "  gg active           把 ~/.gg/bin 写进 PATH（自动识别 shell）\n"
+                        "  gg active status     查看当前状态\n"
+                        "  gg active off        移除写入的配置\n"
+                        "  gg active print      只打印配置片段，不写文件\n"
+                        "  gg active zsh        指定 shell（bash/zsh/fish/powershell/cmd）"));
+}
+
 int cmd_active(int argc, char **argv) {
   const char *shell = 0;
   int print_only = 0, off = 0, status = 0;
   for (int i = 0; i < argc; i++) {
-    if (arg_is_flag(argv[i], 0, "--print")) print_only = 1;
-    else if (arg_is_flag(argv[i], 0, "--off") || gg_streq(argv[i], "off") ||
-             gg_streq(argv[i], "deactivate") || gg_streq(argv[i], "disable"))
+    const char *a = argv[i];
+    if (a[0] == '-' && a[1]) {
+      if (arg_is_flag(a, 0, "--print")) print_only = 1;
+      else if (arg_is_flag(a, 0, "--off")) off = 1;
+      else if (arg_is_flag(a, "-h", "--help")) { active_usage(); return 0; }
+      else if (arg_is_flag(a, "-s", "--shell") && i + 1 < argc) shell = argv[++i];
+      /* unknown flags are ignored, they are not shell names */
+      continue;
+    }
+    if (gg_streq(a, "off") || gg_streq(a, "deactivate") || gg_streq(a, "disable"))
       off = 1;
-    else if (gg_streq(argv[i], "status")) status = 1;
-    else if (arg_is_flag(argv[i], "-s", "--shell") && i + 1 < argc)
-      shell = argv[++i];
-    else if (!shell) shell = argv[i];
+    else if (gg_streq(a, "status")) status = 1;
+    else if (gg_streq(a, "print")) print_only = 1;
+    else if (gg_streq(a, "on") || gg_streq(a, "enable") || gg_streq(a, "activate"))
+      ;                              /* the default action already */
+    else if (!shell) shell = a;
   }
   if (!shell) shell = detect_shell();
   if (status) {

@@ -100,11 +100,15 @@ check "script args"        "arg1"              sh -c "printf 'print(arg[1])\n' >
 echo
 echo "paths"
 check "active print"       ">>> gg >>>"        "$GG" active --print
-check "active block"       '.gg/bin'           "$GG" active --shell bash --print
+check "active print word"  "export PATH"       "$GG" active print
+check "active block"       "$GG_DIR/bin"       "$GG" active --shell bash --print
+check "portable block"     '.gg/bin'           env -u GG_DIR "$GG" active --shell bash --print
 check "fish block"         "set -gx PATH"      "$GG" active --shell fish --print
-check "powershell block"   "USERPROFILE"       "$GG" active --shell powershell --print
+check "powershell block"   '$ggbin'            "$GG" active --shell powershell --print
+check "ps default block"   "USERPROFILE"       env -u GG_DIR "$GG" active --shell powershell --print
+check "active help"        "usage: gg active"  "$GG" active --help
 check "active runs"        "enabled gg in"     "$GG" active --shell bash
-check "bashrc written"     "/.gg/bin"          cat "$HOME/.bashrc"
+check "bashrc written"     "$GG_DIR/bin"       cat "$HOME/.bashrc"
 check "active is idempotent" "1"               sh -c "grep -c '>>> gg >>>' $HOME/.bashrc"
 check "active off"         "removed gg block"  "$GG" active off
 check "block gone"         "0"                 sh -c "grep -c '>>> gg >>>' $HOME/.bashrc || true"
