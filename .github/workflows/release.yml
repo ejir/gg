@@ -1,0 +1,36 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install cosmocc
+        run: |
+          sh scripts/fetch-cosmocc.sh 4.0.2 "$HOME/.cosmocc"
+          echo "$HOME/.cosmocc/bin" >> "$GITHUB_PATH"
+      - name: build
+        run: make ape
+      - name: test
+        run: |
+          make host
+          make test-headless GG=build/gg-host
+          python3 tests/pty_test.py build/gg-host
+      - name: checksums
+        run: cd bin && sha256sum gg gg.exe gg.com > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            bin/gg
+            bin/gg.exe
+            bin/gg.com
+            bin/SHA256SUMS
+          generate_release_notes: true

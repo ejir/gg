@@ -1,0 +1,6 @@
+Lua 5.4.7 — Copyright (C) 1994-2024 Lua.org, PUC-Rio.
+MIT License: https://www.lua.org/license.html
+
+Vendored source drop of https://github.com/lua/lua (tag v5.4.7) used to embed a
+Lua interpreter inside the `gg` executable. Lua core files only; the standalone
+`lua.c` / `luac.c` interpreters are intentionally not vendored.

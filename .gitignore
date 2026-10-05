@@ -1,0 +1,9 @@
+# build outputs (bin/ is deliberate: those are the files we ship)
+build/
+*.o
+*.d
+*.aarch64.elf
+*.com.dbg
+.DS_Store
+__pycache__/
+*.pyc
