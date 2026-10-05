@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the portable binary
+        run: |
+          sh scripts/fetch-cosmocc.sh 4.0.2 "$HOME/.cosmocc"
+          echo "$HOME/.cosmocc/bin" >> "$GITHUB_PATH"
+      - name: build (ape)
+        run: make ape
+      - name: build (host) + tests
+        run: |
+          make host
+          make test-headless GG=build/gg-host
+          python3 tests/pty_test.py build/gg-host
+      - name: smoke test the ape
+        run: |
+          ./bin/gg --version
+          GG_PLAIN=1 GG_DIR=$(mktemp -d) ./bin/gg ls
+          GG_PLAIN=1 GG_DIR=$(mktemp -d) ./bin/gg hello ci
+      - name: self-contained script smoke test
+        run: |
+          # bundle the ape together with a script and run the copy
+          mkdir -p /tmp/pk/assets
+          printf 'local M = {}\nM.params={{name="x",pos=1,type="string",default="ci"}}\nfunction M.run(ctx) print("bundled "..tostring(gg.assets.read("note.txt"))..ctx.args.x) return 0 end\nreturn M\n' > /tmp/pk/tool.lua
+          echo hello > /tmp/pk/assets/note.txt
+          ./bin/gg bundle /tmp/pk/app.gg /tmp/pk/tool.lua /tmp/pk/assets
+          GG_PLAIN=1 GG_DIR=$(mktemp -d) /tmp/pk/app.gg tool world
+          test -x /tmp/pk/app.gg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gg-ape
+          path: |
+            bin/gg
+            bin/gg.exe
+            bin/gg.com
