@@ -32,6 +32,17 @@ check() { # check <name> <expected-substring> <command...>
   fi
 }
 
+# run a file that may be an APE (needs the shell) or a plain host binary
+run_any() { # run_any <file> [args...]
+  f=$1
+  shift
+  if [ "$(head -c 2 "$f" 2>/dev/null)" = "MZ" ]; then
+    sh "$f" "$@"
+  else
+    "$f" "$@"
+  fi
+}
+
 check_rc() { # check_rc <name> <expected-rc> <command...>
   name=$1; want=$2; shift 2
   "$@" >/dev/null 2>&1
@@ -114,6 +125,39 @@ check "bashrc written"     "$GG_DIR/bin"       cat "$HOME/.bashrc"
 check "active is idempotent" "1"               sh -c "grep -c '>>> gg >>>' $HOME/.bashrc"
 check "active off"         "removed gg block"  "$GG" active off
 check "block gone"         "0"                 sh -c "grep -c '>>> gg >>>' $HOME/.bashrc || true"
+
+echo
+echo "self-contained scripts (gg bundle)"
+BUNDLE=$WORK/bundle
+mkdir -p "$BUNDLE/assets"
+cat > "$BUNDLE/tool.lua" <<'LUA'
+local M = {}
+M.title = "tool · bundled"
+M.params = { { name = "who", pos = 1, type = "string", default = "nobody" } }
+function M.run(ctx)
+  local data = gg.assets.read("greeting.txt")
+  ctx.log("hi %s: %s", tostring(ctx.args.who), data or "no asset")
+  return 0
+end
+return M
+LUA
+printf 'asset-payload' > "$BUNDLE/assets/greeting.txt"
+printf 'print("bundle init ran")\n' > "$BUNDLE/init.lua"
+printf 'quick\techo BUNDLED-OK\tbundled one liner\n' > "$BUNDLE/registry.tsv"
+check "bundle writes"      "wrote"          "$GG" bundle "$BUNDLE/app.gg" "$BUNDLE/tool.lua" "$BUNDLE/assets" "$BUNDLE/init.lua" "$BUNDLE/registry.tsv"
+check "bundle carries"     "modules/tool.lua" "$GG" bundle "$BUNDLE/again.gg" -f "$BUNDLE/tool.lua"
+check "bundled module runs" "hi ada: asset-payload"  run_any "$BUNDLE/app.gg" tool ada
+check "bundled init.lua"   "bundle init ran"  run_any "$BUNDLE/app.gg" -e 'print("x")'
+check "bundled assets list" "modules/tool.lua" run_any "$BUNDLE/app.gg" -e 'print(table.concat(gg.assets.list(), " "))'
+check "bundled registry"   "BUNDLED-OK"       run_any "$BUNDLE/app.gg" quick
+check "bundled marker"     "(bundled)"        run_any "$BUNDLE/app.gg" ls
+check "grep-still-works"   "gg"               "$GG" --version
+check_rc "bundled rm refused" 1               run_any "$BUNDLE/app.gg" rm tool
+# re-bundling from a bundled binary keeps its scripts and can drop entries
+check "rm: drops entries"  "no extra files"   run_any "$BUNDLE/app.gg" bundle "$BUNDLE/lean.gg" rm:assets
+check "dropped asset gone" "nil"              run_any "$BUNDLE/lean.gg" -e 'print(tostring(gg.assets.read("greeting.txt")))'
+check "still-bundled module in lean" "hi bob: no asset" run_any "$BUNDLE/lean.gg" tool bob
+check "bundle help"        "self-contained scripts" "$GG" help bundle
 
 echo
 echo "scaffolding"

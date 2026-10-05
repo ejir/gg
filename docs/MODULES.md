@@ -215,8 +215,33 @@ M.params = {
 ### 元信息
 
 `gg.version` `gg.url` `gg.exe`（当前二进制的绝对路径）`gg.dir` `gg.home` `gg.modules_dir`
-`gg.bin_dir` `gg.config_path` `gg.interactive` `gg.lang`
+`gg.bin_dir` `gg.config_path` `gg.interactive` `gg.lang` `gg.bundled`（这个文件里有没有归档）
 `gg.platform` = `{ os, arch, cpus, root, interactive, lang, home, dir }`
+
+### 自带资源（`gg bundle` 打出来的文件）
+
+`gg bundle app.gg mod.lua assets/` 会把二进制和 zip 粘在一起（见 README 第 5 节）。
+归档里的内容通过下面这些函数读取：
+
+| 函数 | 说明 |
+| --- | --- |
+| `gg.assets.read(name)` | 读 `assets/<name>`（也可以直接写 `modules/x.lua` 这种完整路径）。没有则返回 `nil` |
+| `gg.assets.list([前缀])` | 列出归档里由 `gg bundle` 加入的条目（带 `.gg-manifest` 时只列这些） |
+| `gg.assets.have(name)` | 是否存在 |
+| `gg.assets.dir()` | 需要真实文件路径时用：把整个归档解包到一个临时目录并返回目录路径 |
+
+在 APE 上还可以直接用 Cosmopolitan 的 zipos：`io.open("/zip/assets/logo.txt")`。
+宿主构建没有 zipos，所以优先用 `gg.assets.*`（两种构建都工作）。
+
+归档里被 gg 自动识别的东西：
+
+| 归档路径 | 作用 |
+| --- | --- |
+| `modules/<name>.lua` | 就是模块，`gg <name>` 直接跑；同名时优先级：用户文件 > 归档 > 内置 |
+| `assets/<...>` | `gg.assets.read()` 读的数据 |
+| `init.lua` | 启动钩子：Lua 环境就绪后执行一次（适合设默认值、注册命令） |
+| `registry.tsv` | 预先注册的命令行，格式 `名字<TAB>命令<TAB>描述`（只读，`gg rm` 拒绝删除） |
+| `.gg-manifest` | gg 自己写的清单（记录哪些条目是打包进来的），不用手动维护 |
 
 ### 注册表与模块
 
@@ -249,6 +274,7 @@ return {
 
 * `gg <模块> --help` 看自动生成的用法。
 * `gg edit <模块>` 保存前会自动做语法检查并定位错误行。
+* 看归档里到底有什么：`gg -e 'print(table.concat(gg.assets.list(), "\n"))'`。
 * 非交互场景：`GG_PLAIN=1 gg ls --json`、`GG_PLAIN=1 gg mymod arg1`。
   非交互时菜单返回 `nil`（等于取消）、表单返回默认值、`ctx.confirm` 默认返回真 —— 想强制拒绝
   就设 `GG_ASSUME_YES=0`。

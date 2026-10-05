@@ -21,6 +21,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 GG = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "build", "gg-host")
+GG = os.path.abspath(GG)
 
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][B0]|\x1b[=>]")
 
@@ -216,6 +217,37 @@ def test_module_tui_form(env):
     s.close()
 
 
+def test_bundled_module(env):
+    """a self-contained script: gg bundle + run the copy's TUI."""
+    print("\nself-contained script (tty)")
+    pack = os.path.join(env["GG_DIR"], "..", "pack")
+    os.makedirs(os.path.join(pack, "assets"), exist_ok=True)
+    with open(os.path.join(pack, "tool.lua"), "w") as f:
+        f.write(
+            "local M = {}\n"
+            "M.title = 'bundled tool'\n"
+            "M.params = { { name = 'what', pos = 1, type = 'string', label = 'what' } }\n"
+            "function M.run(ctx) return 0 end\n"
+            "function M.tui(ctx)\n"
+            "  ctx.tui.message(M.title, gg.assets.read('note.txt') or 'missing')\n"
+            "  return 0\n"
+            "end\n"
+            "return M\n"
+        )
+    with open(os.path.join(pack, "assets", "note.txt"), "w") as f:
+        f.write("asset text on screen\n")
+    app = os.path.join(pack, "app.gg")
+    subprocess.run(exec_argv(GG) + ["bundle", app, os.path.join(pack, "tool.lua"),
+                                    os.path.join(pack, "assets")],
+                   env=dict(os.environ, **env), check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    s = Session([app, "tool"], env=env)
+    out = s.drain(1.5)
+    check("bundled module runs from the copy", "asset text on screen" in out, out)
+    out = s.send("q", wait=0.4)
+    s.close()
+
+
 def test_active_tui(env):
     print("\nactive (tty)")
     s = Session([GG, "active"], env=env)
@@ -249,6 +281,7 @@ def main():
     test_form_and_back(env)
     test_progress(env)
     test_module_tui_form(env)
+    test_bundled_module(env)
     test_active_tui(env)
     test_editor(env)
     print(f"\n  \033[1m{passed} passed, {failed} failed\033[0m")

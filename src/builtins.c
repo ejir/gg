@@ -464,9 +464,11 @@ int cmd_ls(int argc, char **argv) {
   for (int i = 0; i < modules_count(); i++) {
     module_info *m = modules_at(i);
     printf("  %s%-14s%s %s%s%s", c_accent(), m->name, c_reset(), m->title,
-           m->builtin ? tui_style(ST_MUTED) : "",
-           m->builtin ? gg_tr("  (built-in)", "  (内置)") : "");
-    if (!m->builtin) printf("%s", c_reset());
+           (m->builtin || m->bundled) ? tui_style(ST_MUTED) : "",
+           m->builtin   ? gg_tr("  (built-in)", "  (内置)")
+           : m->bundled ? gg_tr("  (bundled)", "  (打包在文件里)")
+                        : "");
+    if (!m->builtin && !m->bundled) printf("%s", c_reset());
     printf("\n");
     if (m->desc && *m->desc) printf("      %s%s%s\n", c_dim(), m->desc, c_reset());
   }
@@ -476,7 +478,11 @@ int cmd_ls(int argc, char **argv) {
            c_reset());
     for (int i = 0; i < n; i++) {
       reg_entry *e = reg_at(i);
-      printf("  %s%-14s%s %s\n", c_accent(), e->name, c_reset(), e->cmd);
+      printf("  %s%-14s%s %s%s%s\n", c_accent(), e->name, c_reset(), e->cmd,
+             (e->source && gg_streq(e->source, "bundle")) ? tui_style(ST_MUTED) : "",
+             (e->source && gg_streq(e->source, "bundle"))
+                 ? gg_tr("  (bundled)", "  (打包在文件里)")
+                 : "");
       if (e->desc && *e->desc)
         printf("      %s%s%s\n", c_dim(), e->desc, c_reset());
     }
@@ -558,6 +564,13 @@ int cmd_rm(int argc, char **argv) {
   for (int i = 0; i < argc; i++) {
     module_info *m = modules_find(argv[i]);
     int done = 0;
+    if (m && m->bundled) {
+      gg_warn("%s %s", argv[i],
+              gg_tr("is bundled into this file — rebuild the bundle without it",
+                    "打包在这个文件里 — 重新打包时不要包含它"));
+      rc = 1;
+      continue;
+    }
     if (m && !m->builtin && m->path) {
       if (tui_confirm(gg_tr("delete module", "删除模块"), argv[i], 0)) {
         if (unlink(m->path) == 0) {
@@ -568,9 +581,15 @@ int cmd_rm(int argc, char **argv) {
         done = 1;
       }
     }
-    if (!done && reg_remove(argv[i]) == 0) {
+    int rr = reg_remove(argv[i]);
+    if (!done && rr == 0) {
       gg_ok("%s %s", gg_tr("removed command", "已删除命令:"), argv[i]);
       done = 1;
+    } else if (!done && rr == -2) {
+      gg_warn("%s %s", argv[i],
+              gg_tr("is bundled into this file — rebuild the bundle without it",
+                    "打包在这个文件里 — 重新打包时不要包含它"));
+      done = 1; /* handled: not an unknown name */
     }
     if (!done) {
       gg_warn("%s %s", argv[i], gg_tr("not found (built-ins cannot be removed)",
@@ -598,8 +617,14 @@ int cmd_show(int argc, char **argv) {
     print_kv(gg_tr("module", "模块"), "%s", m->name);
     print_kv(gg_tr("title", "标题"), "%s", m->title);
     if (m->desc && *m->desc) print_kv(gg_tr("about", "说明"), "%s", m->desc);
-    if (m->path) print_kv(gg_tr("file", "文件"), "%s", m->path);
-    else print_kv(gg_tr("file", "文件"), "%s", gg_tr("built into gg", "内置在 gg 中"));
+    if (m->builtin)
+      print_kv(gg_tr("source", "来源"), "%s",
+               gg_tr("built into gg", "内置在 gg 中"));
+    else if (m->bundled)
+      print_kv(gg_tr("source", "来源"), "%s (%s)", m->path,
+               gg_tr("bundled", "打包在可执行文件里"));
+    else if (m->path)
+      print_kv(gg_tr("file", "文件"), "%s", m->path);
     char *p = module_path_of(name);
     size_t len = 0;
     char *src = p ? gg_read_file(p, &len) : 0;
@@ -1014,6 +1039,143 @@ int cmd_modules(int argc, char **argv) {
     return 0;
   }
   return cmd_ls(0, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* bundle — copy this binary plus your files into one self-contained    */
+/* executable (redbean style)                                          */
+/* ------------------------------------------------------------------ */
+
+static void bundle_usage(void) {
+  printf("%s\n", gg_tr(
+      "usage: gg bundle <target[.gg]> [file-or-dir ...] [rm:pattern]...\n"
+      "\n"
+      "  Writes a copy of this binary with a zip archive glued to it, so the\n"
+      "  copy runs your scripts and reads your assets on any machine.\n"
+      "\n"
+      "  file.lua      -> modules/<name>.lua   (`gg <name>` in the copy)\n"
+      "  directory/    -> directory/**         (walked recursively)\n"
+      "  name=path     -> stored under that exact zip name\n"
+      "  rm:pattern    -> drop every entry matching the glob\n"
+      "  init.lua      -> startup hook, runs once before the lua state is used\n"
+      "  -f            overwrite an existing target\n"
+      "\n"
+      "  example:  gg bundle dl.gg dl.lua assets/\n"
+      "            ./dl.gg dl https://example.com/big.iso",
+      "用法: gg bundle <目标[.gg]> [文件或目录 ...] [rm:模式]...\n"
+      "\n"
+      "  生成一个把本二进制和 zip 归档粘在一起的副本，拷到任何机器上都能直接跑你的脚本、\n"
+      "  读你的资源文件，不需要装 gg。\n"
+      "\n"
+      "  file.lua      -> modules/<名字>.lua   （副本里 `gg <名字>` 就能跑）\n"
+      "  dir/          -> dir/**                （递归打包）\n"
+      "  name=path     -> 用指定的 zip 内路径存放\n"
+      "  rm:模式       -> 删掉归档里匹配的条目\n"
+      "  init.lua      -> 启动钩子，Lua 环境就绪时执行一次\n"
+      "  -f            覆盖已存在的目标文件\n"
+      "\n"
+      "  例:  gg bundle dl.gg dl.lua assets/\n"
+      "       ./dl.gg dl https://example.com/big.iso"));
+}
+
+int cmd_bundle(int argc, char **argv) {
+  char **files = calloc((size_t)(argc + 1), sizeof(char *));
+  char **rms = calloc((size_t)(argc + 1), sizeof(char *));
+  int nfiles = 0, nrms = 0, force = 0;
+  const char *target = 0;
+  for (int i = 0; i < argc; i++) {
+    const char *a = argv[i];
+    if (arg_is_flag(a, "-h", "--help")) {
+      bundle_usage();
+      free(files);
+      free(rms);
+      return 0;
+    }
+    if (arg_is_flag(a, "-f", "--force")) {
+      force = 1;
+      continue;
+    }
+    if (gg_startswith(a, "rm:")) {
+      rms[nrms++] = (char *)a + 3;
+      continue;
+    }
+    if (!target) {
+      target = a;
+      continue;
+    }
+    files[nfiles++] = (char *)a;
+  }
+  if (!target) {
+    bundle_usage();
+    free(files);
+    free(rms);
+    return 1;
+  }
+  /* a bare "dl" becomes "dl.gg"; anything with an extension is used as is */
+  const char *out = target;
+  char *owned = 0;
+  if (!gg_endswith(target, ".gg") && !strchr(gg_basename(target), '.')) {
+    owned = gg_asprintf("%s.gg", target);
+    out = owned;
+  }
+  char *outdir = gg_dirname_of(out);
+  if (*outdir) gg_mkdir_p(outdir);
+  free(outdir);
+  char err[512] = {0};
+  char **zipnames = 0, **diskpaths = 0;
+  int rc = 1;
+  int n = bundle_expand_args((const char *const *)files, nfiles, &zipnames,
+                             &diskpaths, err, sizeof(err));
+  if (n < 0) {
+    gg_error("%s", err);
+  } else if (bundle_write(out, (const char *const *)zipnames,
+                          (const char *const *)diskpaths, n, force,
+                          (const char *const *)rms, nrms, err, sizeof(err)) != 0) {
+    gg_error("%s", err);
+  } else {
+    /* report what the new file is: size on disk + what it carries */
+    bundle_scan_file(out);
+    struct stat st;
+    size_t size = stat(out, &st) == 0 ? (size_t)st.st_size : 0;
+    int mods = 0, assets = 0;
+    for (int i = 0; i < n; i++) {
+      if (gg_startswith(zipnames[i], "modules/")) mods++;
+      else if (gg_startswith(zipnames[i], "assets/")) assets++;
+    }
+    if (n > 0) {
+      printf("%s %s — %.2f MB", gg_tr("wrote", "已生成"), out,
+             (double)size / (1024.0 * 1024.0));
+      if (mods) printf(" · %d %s", mods, gg_tr("modules", "个模块"));
+      if (assets) printf(" · %d assets", assets);
+      printf("\n");
+    } else {
+      printf("%s %s — %.2f MB (%s)\n", gg_tr("wrote", "已生成"), out,
+             (double)size / (1024.0 * 1024.0),
+             gg_tr("no extra files given", "没有附加文件"));
+    }
+    int user = bundle_user_count();
+    if (user > 0) {
+      printf("%s%s:%s\n", c_dim(), gg_tr("carries", "内含"), c_reset());
+      for (int i = 0; i < user && i < 40; i++)
+        printf("%s  %s%s\n", c_dim(), bundle_user_name(i), c_reset());
+    }
+    printf("%s%s%s\n", c_dim(),
+           gg_tr("run it anywhere: the file is a complete gg with your script "
+                 "inside",
+                 "拷到任何机器都能直接跑：这个文件就是带了脚本的完整 gg"),
+           c_reset());
+    rc = 0;
+  }
+  for (int i = 0; i < (n > 0 ? n : 0); i++) {
+    free(zipnames[i]);
+    free(diskpaths[i]);
+  }
+  free(zipnames);
+  free(diskpaths);
+  free(files);
+  free(rms);
+  free(owned);
+  return rc;
 }
 
 int cmd_config(int argc, char **argv) {

@@ -20,7 +20,7 @@ BIN       := bin
 
 # --- sources ---------------------------------------------------------------
 APP_SRC   := src/util.c src/tui.c src/proc.c src/registry.c src/modules.c \
-             src/lua_api.c src/builtins.c src/main.c
+             src/bundle.c src/lua_api.c src/builtins.c src/main.c
 LUA_SRC   := $(wildcard vendor/lua/*.c)
 EMBED_SRC := $(BUILD)/embedded.c
 EXAMPLES  := $(sort $(wildcard examples/*.lua))

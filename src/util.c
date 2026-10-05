@@ -493,6 +493,21 @@ char *gg_ext_of(const char *path) {
   return gg_strdup(dot ? dot + 1 : "");
 }
 
+/* tiny shell-style glob: * and ? only, no character classes */
+int gg_glob_match(const char *pat, const char *str) {
+  if (!pat || !str) return 0;
+  if (!*pat) return !*str;
+  if (*pat == '*') {
+    for (const char *t = str;; t++) {
+      if (gg_glob_match(pat + 1, t)) return 1;
+      if (!*t) return 0;
+    }
+  }
+  if (*pat == '?') return *str && gg_glob_match(pat + 1, str + 1);
+  if (*pat != *str) return 0;
+  return gg_glob_match(pat + 1, str + 1);
+}
+
 const char *gg_exe_path(void) {
   static char buf[PATH_MAX];
   if (buf[0]) return buf;

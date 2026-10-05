@@ -151,6 +151,7 @@ char *gg_dirname_of(const char *path);
 char *gg_ext_of(const char *path);
 
 const char *gg_exe_path(void);         /* path to the running binary */
+int gg_glob_match(const char *pat, const char *str); /* * and ? only */
 const char *gg_which(const char *name); /* cached, returns "" when missing */
 int gg_have(const char *name);          /* gg_which != NULL */
 
@@ -333,10 +334,35 @@ typedef struct {
   char *name;
   char *title;
   char *desc;
-  char *path;    /* NULL when built into the binary */
-  int builtin;
+  char *path;    /* NULL when built into the binary or the bundle */
+  int builtin;   /* compiled into the executable */
+  int bundled;   /* lives in the appended zip */
   int is_tui;
 } module_info;
+
+/* ------------------------------------------------------------------ */
+/* bundle — a zip appended to the binary (self-contained scripts)       */
+/* ------------------------------------------------------------------ */
+
+int bundle_scan(void);        /* parse the appended archive, cached */
+int bundle_present(void);     /* 1 when this binary carries a bundle */
+int bundle_count(void);       /* number of entries in the archive */
+const char *bundle_entry_name(int i);
+unsigned int bundle_entry_size(int i);
+const char *bundle_path(void);
+int bundle_has(const char *zipname);
+char *bundle_read(const char *zipname, size_t *len);   /* malloc'd, or NULL */
+int bundle_write(const char *out, const char *const *zipnames,
+                 const char *const *diskpaths, int n, int force,
+                 const char *const *excl, int nexcl, char *err, size_t errsz);
+int bundle_module_names(char ***names_out);            /* malloc'd name array */
+int bundle_scan_file(const char *path);                /* parse an arbitrary file */
+int bundle_has_manifest(void);                          /* did gg write this bundle? */
+int bundle_user_count(void);                           /* entries gg added */
+const char *bundle_user_name(int i);
+int bundle_expand_args(const char *const *args, int nargs, char ***zipnames,
+                       char ***diskpaths, char *err, size_t errsz);
+unsigned int gg_crc32(const unsigned char *p, size_t n);
 
 void modules_scan(void);
 void modules_rescan(void); /* forget the cache, re-read the module dir */
@@ -344,6 +370,7 @@ int modules_count(void);
 module_info *modules_at(int i);
 module_info *modules_find(const char *name);
 char *module_path_of(const char *name);
+char *module_source_text(const char *name, size_t *len, int *kind);
 
 #define GG_CUR_SHOW "\033[?25h"
 #define GG_CUR_HIDE "\033[?25l"
@@ -393,6 +420,7 @@ int cmd_doctor(int argc, char **argv);
 int cmd_help(int argc, char **argv);
 int cmd_tui(int argc, char **argv);
 int cmd_config(int argc, char **argv);
+int cmd_bundle(int argc, char **argv);
 int cmd_upgrade(int argc, char **argv);
 int cmd_modules(int argc, char **argv);
 int cmd_link(int argc, char **argv);

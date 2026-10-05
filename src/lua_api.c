@@ -1495,6 +1495,117 @@ static int ltui_prompt(lua_State *l) {
 }
 
 /* ------------------------------------------------------------------ */
+/* assets — files carried inside the appended zip (see bundle.c)        */
+/* ------------------------------------------------------------------ */
+
+static char g_assets_dir[PATH_MAX];
+
+static char *asset_key(const char *name) {
+  if (gg_startswith(name, "assets/")) return gg_strdup(name);
+  return gg_asprintf("assets/%s", name);
+}
+
+static int l_assets_read(lua_State *l) {
+  const char *name = luaL_checkstring(l, 1);
+  char *key = asset_key(name);
+  size_t len = 0;
+  char *data = bundle_read(key, &len);
+  free(key);
+  if (!data) {
+    lua_pushnil(l);
+    return 1;
+  }
+  lua_pushlstring(l, data, len);
+  free(data);
+  return 1;
+}
+
+static int l_assets_list(lua_State *l) {
+  const char *prefix = luaL_optstring(l, 1, "");
+  lua_newtable(l);
+  int n = 0;
+  int user = bundle_has_manifest() ? bundle_user_count() : bundle_count();
+  for (int i = 0; i < user; i++) {
+    const char *nm = bundle_has_manifest() ? bundle_user_name(i)
+                                           : bundle_entry_name(i);
+    if (!nm) continue;
+    if (*prefix && !gg_startswith(nm, prefix)) continue;
+    lua_pushstring(l, nm);
+    lua_rawseti(l, -2, ++n);
+  }
+  return 1;
+}
+
+static void assets_dir_cleanup(void) {
+  rm_rf(g_assets_dir);
+  if (!g_assets_dir[0]) return;
+  if (!getenv("GG_KEEP_ASSETS")) rm_rf(g_assets_dir);
+}
+
+/* extract everything to a private directory (removed at exit) */
+static int l_assets_dir(lua_State *l) {
+  static char cached[PATH_MAX];
+  if (!bundle_present()) {
+    lua_pushnil(l); /* nothing carried: no directory to hand out */
+    return 1;
+  }
+  if (!cached[0]) {
+    char tmpl[PATH_MAX];
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = "/tmp";
+    snprintf(tmpl, sizeof(tmpl), "%s/gg-bundle-%d", tmp, (int)getpid());
+    gg_mkdir_p(tmpl);
+    for (int i = 0; i < bundle_count(); i++) {
+      const char *nm = bundle_entry_name(i);
+      size_t len = 0;
+      char *data = bundle_read(nm, &len);
+      if (!data) continue;
+      char *path = gg_join(tmpl, nm);
+      char *slash = strrchr(path, '/');
+      if (slash) {
+        *slash = 0;
+        gg_mkdir_p(path);
+        *slash = '/';
+      }
+      gg_write_file(path, data, len);
+      free(path);
+      free(data);
+    }
+    snprintf(cached, sizeof(cached), "%s", tmpl);
+    snprintf(g_assets_dir, sizeof(g_assets_dir), "%s", tmpl);
+    atexit(assets_dir_cleanup);
+  }
+  lua_pushstring(l, cached);
+  return 1;
+}
+
+static int l_assets_have(lua_State *l) {
+  const char *name = luaL_checkstring(l, 1);
+  char *key = asset_key(name);
+  int ok = bundle_has(key);
+  free(key);
+  lua_pushboolean(l, ok);
+  return 1;
+}
+
+static int pcall_protected(lua_State *l, int nargs, int nresults);
+
+/* run init.lua once when the lua state comes up (bundles may carry one) */
+static int l_bundle_run_init(lua_State *l) {
+  (void)l;
+  if (!bundle_present()) return 0;
+  size_t len = 0;
+  char *src = bundle_read("init.lua", &len);
+  if (!src) return 0;
+  if (luaL_loadbuffer(l, src, len, "@init.lua(bundle)") == 0)
+    pcall_protected(l, 0, 0);
+  else
+    lua_pop(l, 1);
+  free(src);
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* registration                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1671,6 +1782,18 @@ static void push_gg_table(lua_State *l) {
   lua_setfield(l, -2, "have");
   lua_setfield(l, -2, "proc");
 
+  /* assets table: what this binary carries in its appended zip */
+  lua_newtable(l);
+  lua_pushcfunction(l, l_assets_read);
+  lua_setfield(l, -2, "read");
+  lua_pushcfunction(l, l_assets_list);
+  lua_setfield(l, -2, "list");
+  lua_pushcfunction(l, l_assets_have);
+  lua_setfield(l, -2, "have");
+  lua_pushcfunction(l, l_assets_dir);
+  lua_setfield(l, -2, "dir");
+  lua_setfield(l, -2, "assets");
+
   /* platform table */
   lua_pushcfunction(l, l_platform);
   lua_call(l, 0, 1);
@@ -1697,6 +1820,8 @@ static void push_gg_table(lua_State *l) {
   lua_setfield(l, -2, "lang");
   lua_pushstring(l, gg_exe_path());
   lua_setfield(l, -2, "exe");
+  lua_pushboolean(l, bundle_present());
+  lua_setfield(l, -2, "bundled");
   open_tui(l);
   open_registry(l);
   open_modules(l);
@@ -1751,6 +1876,8 @@ int lua_open_runtime(void) {
       lua_pop(L, 1);
     }
   }
+  /* a bundle may ship an init.lua: run it once, now that gg is ready */
+  l_bundle_run_init(L);
   return 0;
 }
 
@@ -2266,22 +2393,20 @@ int lua_run_module(const char *name, int argc, char **argv, int force_tui) {
   }
   char *path = m->path ? gg_strdup(m->path) : module_path_of(name);
   char chunkname[512];
-  char key[256];
-  unsigned int srclen = 0;
-  snprintf(key, sizeof(key), "mod_%s.lua", name);
-  const char *src = gg_embedded_lookup(key, &srclen);
+  size_t srclen = 0;
+  int kind = 0;
+  char *src = module_source_text(name, &srclen, &kind);
   int rc;
-  if (src) {
-    snprintf(chunkname, sizeof(chunkname), "@%s(builtin)", name);
-    rc = luaL_loadbuffer(L, src, srclen, chunkname);
-  } else if (path && gg_is_file(path)) {
-    snprintf(chunkname, sizeof(chunkname), "@%s", path);
-    rc = luaL_loadfile(L, path);
-  } else {
+  if (!src) {
     gg_error("%s: %s", name, gg_tr("module source not found", "找不到模块源码"));
     free(path);
     return 1;
   }
+  if (kind == 0) snprintf(chunkname, sizeof(chunkname), "@%s(builtin)", name);
+  else if (kind == 1) snprintf(chunkname, sizeof(chunkname), "@%s(bundled)", name);
+  else snprintf(chunkname, sizeof(chunkname), "@%s", m->path ? m->path : name);
+  rc = luaL_loadbuffer(L, src, srclen, chunkname);
+  free(src);
   if (rc != 0) {
     gg_error("%s", lua_tostring(L, -1));
     lua_pop(L, 1);

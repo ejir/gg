@@ -97,6 +97,7 @@ gg --version
 | `gg` | 打开交互面板：左边是所有模块/命令，右边是详情和源码，支持过滤、编辑、运行 |
 | `gg <名字> [参数…]` | 运行同名**模块**（Lua 脚本）→ 同名**注册命令** → 最后回退到系统 `PATH` |
 | `gg lua 脚本` | `gg script.lua a b` 直接跑 Lua 脚本；`gg -e 'print(gg.version)'` 单行求值；`gg repl` 交互式 Lua |
+| `./myapp.gg` | **自包含脚本**：`gg bundle` 出来的文件，自带你的模块和资源，见第 5 节 |
 
 ```
 gg                      # 面板
@@ -119,8 +120,9 @@ gg edit <name>                    内置编辑器（带 Lua 语法高亮 + 语�
 gg link <name> / gg unlink       把模块/命令做成 shell 快捷命令（~/.gg/bin 里）
 gg run <命令行>                   通过 shell 执行（TUI 里会暂停界面、跑完按回车返回）
 gg modules install-examples       把内置示例模块写到 ~/.gg/modules
+gg bundle app.gg 模块.lua 资源/   自包含脚本：二进制 + 你的文件粘成一个（见第 5 节）
 gg config / gg doctor / gg upgrade
-gg help modules|api|active|keys   内置帮助
+gg help modules|api|active|keys|bundle   内置帮助
 ```
 
 ---
@@ -211,7 +213,63 @@ gg link apt        # 之后直接敲：apt update / apt install foo
 
 ---
 
-## 5. 写自己的模块 / writing modules
+## 5. 自包含脚本：把 gg 和你的脚本粘成一个文件 / self-contained scripts
+
+这是 redbean 那种玩法，但在 gg 上：**`gg bundle` 会把本二进制和一段 zip 归档粘在一起**。
+归档里的模块、资源、初始化脚本、注册命令会自动生效 —— 生成的还是那一个文件，
+拷到 Linux / macOS / Windows 上直接跑，对方**不需要装 gg、不需要装 Lua、不需要任何运行时**。
+
+```sh
+# 你的项目
+#   dl.lua            -> 会变成归档里的 modules/dl.lua
+#   assets/logo.txt   -> 会变成 assets/logo.txt（脚本里读得到）
+#   init.lua          -> 启动钩子，Lua 环境就绪时跑一次（可选）
+#   registry.tsv      -> 预先注册的命令行（可选，格式 name<TAB>命令<TAB>描述）
+
+$ gg bundle dl-app.gg dl.lua assets/ init.lua registry.tsv
+wrote dl-app.gg — 1.46 MB · 1 modules · 1 assets
+carries:
+  modules/dl.lua
+  assets/logo.txt
+  init.lua
+  registry.tsv
+run it anywhere: the file is a complete gg with your script inside
+
+$ ./dl-app.gg dl https://example.com/big.iso     # 自己的命令
+$ ./dl-app.gg                                    # 还是完整的 gg：面板、repl、doctor…
+$ ./dl-app.gg ls
+  dl             dl · 自包含下载器  (bundled)
+```
+
+脚本里读自己的资源：
+
+```lua
+function M.run(ctx)
+  ctx.log(gg.assets.read("logo.txt"))      -- assets/logo.txt
+  for _, name in ipairs(gg.assets.list()) do ctx.log("carries %s", name) end
+  if gg.assets.have("config.json") then ... end
+  local dir = gg.assets.dir()              -- 需要真实路径时：全部解包到临时目录
+  return 0
+end
+```
+
+要点：
+
+* **同一个文件**：`dl-app.gg` 就是 gg（带 Lua 解释器 + TUI），只是多背了一个 zip。`--version`、
+  `gg active`、`gg repl` 全都照旧 —— 你可以把它当成"专门给你这个工具定制的 gg"。
+* **打包规则**：`x.lua` → `modules/x.lua`；目录 → 递归原样打包；`name=path` 可以指定归档内的
+  路径；`rm:模式` 删掉归档里匹配的条目（`gg bundle app.gg rm:assets` 就得到一个不带资源的版本）；
+  `init.lua` / `main.lua` 留在归档根部。
+* **再打包**：对一个已经打包过的文件再跑 `gg bundle` 会**带着原来的内容**继续加（清单记录在
+  `.gg-manifest` 里），所以"先做一个内部版本、再分发一个精简版"很顺手。
+* **实现**：APE（Cosmopolitan）天生支持"zip 粘在自己后面"，`/zip/...` 就是归档里的路径；
+  所以在 APE 上 `io.open("/zip/assets/x")` 也能用。gg 自己实现了一份 CRC32 + 最小 zip 读写，
+  宿主构建、单元测试里一样能跑（不需要 cosmocc）。
+* **纯 Lua 也能自包含**：只有一个 `script.lua` 时，`gg bundle script.gg script.lua` 就够了。
+
+---
+
+## 6. 写自己的模块 / writing modules
 
 模块就是一个 Lua 文件，放在 `~/.gg/modules/<名字>.lua`，返回一个表：
 
@@ -288,7 +346,7 @@ bar:done(true, "完成")
 
 ---
 
-## 6. 为什么是单文件 / how the single file works
+## 7. 为什么是单文件 / how the single file works
 
 * `gg` 用 [cosmocc](https://github.com/jart/cosmopolitan) 编译成 **APE（Actually Portable Executable）**：
   同一个文件里同时带着 Linux ELF、macOS Mach-O、Windows PE 的入口，还有 x86-64 与 aarch64 两套代码。
@@ -302,18 +360,18 @@ bar:done(true, "完成")
 
 ```sh
 $ ls -l bin/gg
--rwxr-xr-x 1 user user 1510169 bin/gg   # ≈1.5 MB：Lua 5.4 + TUI + 示例模块全在里面
+-rwxr-xr-x 1 user user 1526541 bin/gg   # ≈1.5 MB：Lua 5.4 + TUI + 示例模块全在里面
 ```
 
 ---
 
-## 7. 从源码构建 / building
+## 8. 从源码构建 / building
 
 ```sh
 git clone https://github.com/ejir/gg && cd gg
 
 make host            # 用本机 cc 编译（快速迭代、跑测试）
-make test            # 54 项无头测试 + 20 项伪终端 TUI 测试
+make test            # 67 项无头测试 + 21 项伪终端 TUI 测试
 make ape             # 需要 cosmocc → 产出 bin/gg、bin/gg.exe、bin/gg.com
 make install         # 装到 ~/.gg/bin 并执行 gg active
 ```
@@ -344,7 +402,7 @@ docs/            模块与 API 说明
 
 ---
 
-## 8. FAQ
+## 9. FAQ
 
 **它和 shell 别名有什么区别？**
 别名只在你的 shell 里、只在那台机器上；gg 的模块是可移植的文件 + 一行 Lua，`gg active` 之后
@@ -361,6 +419,10 @@ Cosmopolitan 提供了 Bourne 风格的命令解释器）。
 不会。检测到非终端（`GG_PLAIN=1`、`TERM=dumb`、重定向）时，菜单变成编号列表（取消返回 `nil`）、
 表单直接用默认值、`gg ls --json` 输出机器可读的 JSON。管道里的 `ctx.confirm("删除吗？")` 默认按
 "是" 处理，好让无人值守的脚本跑下去；把 `GG_ASSUME_YES=0` 设上就一律拒绝。
+
+**自包含脚本和"把模块复制到 ~/.gg/modules"有什么区别？**
+模块目录是"装在这台机器上"；`gg bundle` 出来的是一个文件，谁拿到都能跑，不需要先装 gg
+（对方也不需要 Lua —— 解释器就在文件里）。想再减一点体积可以用 `rm:` 去掉不需要的归档条目。
 
 **怎么更新？**
 `gg upgrade`（从 releases 下载并原子替换自己；Windows 上先改名旧文件再落新文件）。

@@ -42,7 +42,6 @@ void reg_reload(void) {
   g_loaded = 1;
   size_t len = 0;
   char *data = gg_read_file(reg_path(), &len);
-  if (!data) return;
   char *p = data;
   while (p && *p) {
     char *nl = strchr(p, '\n');
@@ -71,6 +70,31 @@ void reg_reload(void) {
     p = nl ? nl + 1 : 0;
   }
   free(data);
+  /* commands carried by a bundle are read-only extras */
+  data = bundle_read("registry.tsv", &len);
+  if (data) {
+    char *p2 = data;
+    while (p2 && *p2) {
+      char *nl = strchr(p2, '\n');
+      if (nl) *nl = 0;
+      char *line = gg_trim(p2);
+      if (*line && *line != '#') {
+        char *t1 = strchr(line, '\t');
+        if (t1) {
+          *t1 = 0;
+          char *t2 = strchr(t1 + 1, '\t');
+          char *desc = (char *)"";
+          if (t2) {
+            *t2 = 0;
+            desc = t2 + 1;
+          }
+          reg_push(gg_trim(line), gg_trim(t1 + 1), gg_trim(desc), "bundle");
+        }
+      }
+      p2 = nl ? nl + 1 : 0;
+    }
+    free(data);
+  }
 }
 
 void reg_load(void) {
@@ -127,6 +151,8 @@ int reg_remove(const char *name) {
   reg_load();
   for (int i = 0; i < g_reg_n; i++) {
     if (gg_streq(g_reg[i].name, name)) {
+      if (g_reg[i].source && gg_streq(g_reg[i].source, "bundle")) return -2;
+      if (g_reg[i].source && gg_streq(g_reg[i].source, "builtin")) return -2;
       free(g_reg[i].name);
       free(g_reg[i].cmd);
       free(g_reg[i].desc);

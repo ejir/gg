@@ -44,7 +44,8 @@ static void help_top(void) {
   printf("  %sdoctor%s | %sconfig%s | %supgrade%s\n", c_accent(), c_reset(),
          c_accent(), c_reset(), c_accent(), c_reset());
   printf("  %shelp%s <topic>             %s\n", c_accent(), c_reset(),
-         gg_tr("topics: modules lua active paths", "主题: modules lua active paths"));
+         gg_tr("topics: modules lua active paths bundle",
+               "主题: modules lua active paths bundle"));
   printf("\n%s%s%s\n", c_dim(),
          gg_tr("first run:  gg active   then reopen your shell",
                "首次使用:  gg active   然后重开终端"),
@@ -164,6 +165,30 @@ static void help_topic(const char *topic) {
         "  3. `gg active status` 查看状态，`gg active off` 撤销\n"
         "  4. `gg active print` 只打印配置片段\n"
         "  5. `gg active --shell fish|zsh|bash|powershell|cmd` 强制指定 shell\n"));
+  } else if (gg_streq(topic, "bundle") || gg_streq(topic, "script")) {
+    printf("%s%s%s\n\n", c_bold(),
+           gg_tr("self-contained scripts (gg bundle)", "自包含脚本（gg bundle）"),
+           c_reset());
+    printf("%s\n", gg_tr(
+        "`gg bundle app.gg mod.lua assets/` writes a copy of this binary with\n"
+        "a zip glued to it: modules/, assets/, init.lua and registry.tsv from\n"
+        "that archive are used automatically, so app.gg runs your script on\n"
+        "any machine — same file, no gg installation needed.\n\n"
+        "  gg bundle app[.gg] [file-or-dir ...] [rm:pattern]...   [-f]\n"
+        "  gg bundle app.gg rm:assets                             drop entries\n"
+        "\n"
+        "inside a module: gg.assets.read(name), gg.assets.list(),\n"
+        "gg.assets.have(name), gg.assets.dir() (unpack everything).\n"
+        "the plain lua way also works on the ape: io.open('/zip/assets/x')\n",
+        "`gg bundle app.gg mod.lua assets/` 会把本二进制和一段 zip 粘在一起：归档里的\n"
+        "modules/、assets/、init.lua、registry.tsv 会自动生效，所以 app.gg 在任何机器上\n"
+        "都能直接跑你的脚本 —— 同一个文件，不需要目标机器安装 gg。\n\n"
+        "  gg bundle app[.gg] [文件或目录 ...] [rm:模式]...   [-f]\n"
+        "  gg bundle app.gg rm:assets                             删掉条目\n"
+        "\n"
+        "模块里可以用: gg.assets.read(name) / gg.assets.list() /\n"
+        "gg.assets.have(name) / gg.assets.dir()（解包到临时目录）。\n"
+        "在 APE 上也可以用原生写法 io.open('/zip/assets/x')。\n"));
   } else if (gg_streq(topic, "commands") || gg_streq(topic, "keys")) {
     printf("%s%s%s\n", c_bold(), gg_tr("dashboard keys", "面板快捷键"), c_reset());
     printf("  ↑↓ / j k    %s\n", gg_tr("move", "移动"));
@@ -259,7 +284,7 @@ static void dash_build(dash_list *l) {
     it->name = gg_strdup(m->name);
     it->title = gg_strdup(m->title ? m->title : m->name);
     it->desc = gg_strdup(m->desc ? m->desc : "");
-    it->path = m->path ? gg_strdup(m->path) : 0;
+    it->path = (m->path && !m->bundled) ? gg_strdup(m->path) : 0;
   }
   for (int i = 0; i < reg_count(); i++) {
     reg_entry *e = reg_at(i);
@@ -353,14 +378,25 @@ static void dash_detail(sbuf *b, int row, int col, int width, dash_item *it) {
     }
     r++;
   }
-  if (it->path) {
+  if (it->kind == 1) {
+    /* a module: say where it comes from and preview its source */
+    module_info *m = modules_find(it->name);
+    size_t len = 0;
+    int src_kind = 0;
+    char *src = module_source_text(it->name, &len, &src_kind);
     tui_at(b, r++, col);
     sb_adds(b, tui_style(ST_MUTED));
-    sb_adds(b, it->path);
+    if (m && m->builtin)
+      sb_adds(b, gg_tr("built into gg", "内置在 gg 中"));
+    else if (m && m->bundled) {
+      char info[PATH_MAX + 32];
+      snprintf(info, sizeof(info), "%s (%s)", m->path,
+               gg_tr("bundled", "打包在文件里"));
+      sb_adds(b, info);
+    }
+    else if (m && m->path)
+      sb_adds(b, m->path);
     sb_adds(b, ST_RESET);
-    /* source preview */
-    size_t len = 0;
-    char *src = gg_read_file(it->path, &len);
     if (src) {
       r++;
       int lines = 0;
@@ -369,25 +405,20 @@ static void dash_detail(sbuf *b, int row, int col, int width, dash_item *it) {
         char *nl = strchr(p, '\n');
         if (nl) *nl = 0;
         tui_at(b, r++, col);
-        if (lines < 2) {
-          sb_adds(b, tui_style(ST_DIM));
-          sb_adds(b, p);
-          sb_adds(b, ST_RESET);
-        } else {
-          gg_highlight_lua(b, p, 0);
-        }
+        sb_adds(b, tui_style(ST_MUTED));
+        sb_addf(b, "%s", p);
+        sb_adds(b, ST_RESET);
         lines++;
         if (!nl) break;
         p = nl + 1;
       }
       free(src);
     }
-  } else if (it->cmd) {
+  } else if (it->path) {
     tui_at(b, r++, col);
-    sb_adds(b, tui_style(ST_DIM));
-    sb_adds(b, "$ ");
+    sb_adds(b, tui_style(ST_MUTED));
+    sb_adds(b, it->path);
     sb_adds(b, ST_RESET);
-    sb_adds(b, it->cmd);
   }
   (void)r;
 }
@@ -813,6 +844,8 @@ int main(int argc, char **argv) {
   if (gg_streq(cmd, "modules") || gg_streq(cmd, "module"))
     return cmd_modules(restc, rest);
   if (gg_streq(cmd, "config")) return cmd_config(restc, rest);
+  if (gg_streq(cmd, "bundle") || gg_streq(cmd, "pack"))
+    return cmd_bundle(restc, rest);
   if (gg_streq(cmd, "upgrade") || gg_streq(cmd, "self-update"))
     return cmd_upgrade(restc, rest);
   if (gg_streq(cmd, "link") || gg_streq(cmd, "alias")) return cmd_link(restc, rest);

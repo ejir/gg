@@ -27,6 +27,15 @@ jobs:
           ./bin/gg --version
           GG_PLAIN=1 GG_DIR=$(mktemp -d) ./bin/gg ls
           GG_PLAIN=1 GG_DIR=$(mktemp -d) ./bin/gg hello ci
+      - name: self-contained script smoke test
+        run: |
+          # bundle the ape together with a script and run the copy
+          mkdir -p /tmp/pk/assets
+          printf 'local M = {}\nM.params={{name="x",pos=1,type="string",default="ci"}}\nfunction M.run(ctx) print("bundled "..tostring(gg.assets.read("note.txt"))..ctx.args.x) return 0 end\nreturn M\n' > /tmp/pk/tool.lua
+          echo hello > /tmp/pk/assets/note.txt
+          ./bin/gg bundle /tmp/pk/app.gg /tmp/pk/tool.lua /tmp/pk/assets
+          GG_PLAIN=1 GG_DIR=$(mktemp -d) /tmp/pk/app.gg tool world
+          test -x /tmp/pk/app.gg
       - uses: actions/upload-artifact@v4
         with:
           name: gg-ape
