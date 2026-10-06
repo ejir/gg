@@ -70,6 +70,10 @@ check "capture"            "hello"             "$GG" -e 'print(gg.capture("echo 
 check "split/join"         "a,b,c"             "$GG" -e 'print(table.concat(gg.str.split("a b c"), ","))'
 check "tui.form fields"    "u 16 true b"       "$GG" -e 'local f=gg.tui.form({title="t",fields={{name="url",label="U",kind="text",default="u"},{name="jobs",label="J",kind="text",default=16},{name="yes",label="Y",kind="bool",default=true},{name="pick",label="P",kind="choice",choices={"a","b"},default="b"}}}); print(f.url.." "..f.jobs.." "..tostring(f.yes).." "..f.pick)'
 check "tui.menu cancel"    "nil"               "$GG" -e 'print(tostring(gg.tui.menu({title="t",items={"a","b"}})))'
+check "completion script" "_gg_complete"       "$GG" completion bash
+check "completion names"  "aria2c"            "$GG" __complete ar
+check "completion flags"  "--jobs"            "$GG" __complete -- aria2c --jo
+check "refresh PATH cache" "function:"        "$GG" -e 'print(gg.refresh_tools)'
 
 echo
 echo "modules"
@@ -81,6 +85,23 @@ check "module defaults"    "hello world."      "$GG" hello
 check "module help"        "options:"          "$GG" hello --help
 check "demo module"        "available demos"   "$GG" demo
 check "unknown module"     "unknown module"    "$GG" no-such-thing-xyz
+
+# A folder module keeps its private helper/assets beside its entry point.
+PKG=$WORK/module-package/mytool
+mkdir -p "$PKG/assets"
+cat > "$PKG/mytool.lua" <<'LUA'
+local M = {}
+function M.run(ctx)
+  local path = gg.join_path(ctx.module_dir, "assets", "payload.txt")
+  print(gg.read(path))
+  return 0
+end
+return M
+LUA
+printf 'folder-asset-ok\n' > "$PKG/assets/payload.txt"
+check "install module folder" "installed module mytool" "$GG" modules install "$PKG"
+check "self-contained module runs" "folder-asset-ok" "$GG" mytool
+check "remove module folder" "deleted" env GG_ASSUME_YES=1 "$GG" rm mytool
 
 echo
 echo "lua syntax"

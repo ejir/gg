@@ -596,6 +596,17 @@ const char *gg_which(const char *name) {
 
 int gg_have(const char *name) { return gg_which(name) != 0; }
 
+void gg_which_clear(void) {
+  for (int i = 0; i < g_which_n; i++) {
+    free(g_which[i].name);
+    free(g_which[i].path);
+  }
+  free(g_which);
+  g_which = 0;
+  g_which_n = 0;
+  g_which_cap = 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* logging                                                             */
 /* ------------------------------------------------------------------ */

@@ -5,16 +5,21 @@
 #include <termios.h>
 
 tui_state T;
+tui_mouse_event T_MOUSE;
 sbuf G_FRAME;
 
 #define ALT_ON "\033[?1049h"
 #define ALT_OFF "\033[?1049l"
+#define MOUSE_ON "\033[?1000h\033[?1006h"
+#define MOUSE_OFF "\033[?1006l\033[?1000l"
 #define CUR_HIDE GG_CUR_HIDE
 #define CUR_SHOW GG_CUR_SHOW
 #define CLR "\033[2J"
 #define HOME "\033[H"
 
 static int g_atexit_done;
+static int g_tui_depth;
+static int g_tui_suspended_depth;
 
 static const char *b_top_left, *b_top_right, *b_bot_left, *b_bot_right;
 static const char *b_h, *b_v, *b_left_tee, *b_right_tee, *b_sel, *b_mark;
@@ -66,6 +71,7 @@ void tui_probe(void) {
   if (done) return;
   done = 1;
   memset(&T, 0, sizeof(T));
+  memset(&T_MOUSE, 0, sizeof(T_MOUSE));
   T.tty_out = isatty(1);
   T.tty_in = isatty(0);
   T.utf8 = locale_is_utf8();
@@ -79,12 +85,13 @@ void tui_probe(void) {
   tui_size();
 }
 
-void tui_restore(void) {
+static void tui_restore_terminal(int clear_suspended) {
   if (T.raw || T.in_alt) {
     sbuf b;
     sb_init(&b, 64);
     sb_adds(&b, ST_RESET);
     sb_adds(&b, CUR_SHOW);
+    sb_adds(&b, MOUSE_OFF);
     sb_adds(&b, ALT_OFF);
     if (T.raw && T.saved_ok) tcsetattr(0, TCSAFLUSH, &T.saved);
     write(1, b.p, b.n);
@@ -92,6 +99,28 @@ void tui_restore(void) {
   }
   T.raw = 0;
   T.in_alt = 0;
+  g_tui_depth = 0;
+  if (clear_suspended) g_tui_suspended_depth = 0;
+}
+
+void tui_restore(void) { tui_restore_terminal(1); }
+
+void tui_suspend(void) {
+  if (!T.interactive || !T.in_alt) return;
+  g_tui_suspended_depth = g_tui_depth ? g_tui_depth : 1;
+  tui_restore_terminal(0);
+}
+
+void tui_resume(void) {
+  if (!T.interactive || !g_tui_suspended_depth) return;
+  if (T.in_alt) {
+    g_tui_suspended_depth = 0;
+    return;
+  }
+  int depth = g_tui_suspended_depth;
+  g_tui_suspended_depth = 0;
+  tui_enter();
+  g_tui_depth = depth;
 }
 
 static void on_signal(int sig) {
@@ -133,7 +162,11 @@ void tui_size(void) {
 }
 
 void tui_enter(void) {
-  if (!T.interactive || T.in_alt) return;
+  if (!T.interactive) return;
+  if (T.in_alt) {
+    g_tui_depth++;
+    return;
+  }
   tui_size();
   if (!T.saved_ok) {
     if (tcgetattr(0, &T.saved) == 0) T.saved_ok = 1;
@@ -150,18 +183,24 @@ void tui_enter(void) {
   }
   sbuf b;
   sb_init(&b, 64);
-  sb_adds(&b, ALT_ON CLR CUR_HIDE);
+  sb_adds(&b, ALT_ON CLR CUR_HIDE MOUSE_ON);
   write(1, b.p, b.n);
   sb_free(&b);
   T.in_alt = 1;
+  g_tui_depth = 1;
 }
 
 void tui_leave(void) {
   if (!T.interactive) return;
+  if (g_tui_depth > 1) {
+    g_tui_depth--;
+    return;
+  }
+  if (g_tui_depth == 1) g_tui_depth = 0;
   if (T.in_alt) {
     sbuf b;
     sb_init(&b, 64);
-    sb_adds(&b, ST_RESET CUR_SHOW ALT_OFF);
+    sb_adds(&b, ST_RESET CUR_SHOW MOUSE_OFF ALT_OFF);
     write(1, b.p, b.n);
     sb_free(&b);
   }
@@ -239,6 +278,54 @@ static int in_byte(void) {
   return g_inbuf[g_inpos++];
 }
 
+/* SGR mouse reports look like ESC [ < button ; x ; y M (or m on release).
+ * They are enabled only while the full-screen TUI owns the terminal. */
+static int in_sgr_mouse(void) {
+  int values[3] = {0, 0, 0};
+  int field = 0, value = 0, digits = 0, final = 0;
+  for (int i = 0; i < 48; i++) {
+    int c = in_byte();
+    if (c < 0) {
+      if (!in_fill(30)) return KEY_NONE;
+      c = in_byte();
+      if (c < 0) return KEY_NONE;
+    }
+    if (c >= '0' && c <= '9') {
+      value = value * 10 + (c - '0');
+      digits++;
+      continue;
+    }
+    if (c == ';' && field < 2) {
+      values[field++] = value;
+      value = 0;
+      digits = 0;
+      continue;
+    }
+    if ((c == 'M' || c == 'm') && field == 2 && digits) {
+      values[field] = value;
+      final = c;
+      break;
+    }
+    return KEY_NONE;
+  }
+  if (!final) return KEY_NONE;
+
+  int code = values[0];
+  memset(&T_MOUSE, 0, sizeof(T_MOUSE));
+  T_MOUSE.x = values[1];
+  T_MOUSE.y = values[2];
+  T_MOUSE.button = code & 3;
+  T_MOUSE.shift = (code & 4) != 0;
+  T_MOUSE.alt = (code & 8) != 0;
+  T_MOUSE.ctrl = (code & 16) != 0;
+  if (code & 64) {
+    T_MOUSE.wheel = (code & 1) ? -1 : 1;
+  } else {
+    T_MOUSE.pressed = final == 'M' && (code & 3) != 3 && !(code & 32);
+  }
+  return KEY_MOUSE;
+}
+
 /* parse one key; timeout 0 = non blocking (returns KEY_NONE) */
 int tui_key(int timeout_ms) {
   if (!T.tty_in) {
@@ -292,6 +379,7 @@ int tui_key(int timeout_ms) {
       c2 = in_byte();
       if (c2 < 0) return KEY_ESC;
     }
+    if (c1 == '[' && c2 == '<') return in_sgr_mouse();
     if (c1 == 'O') {
       switch (c2) {
         case 'A': return KEY_UP;
@@ -467,7 +555,7 @@ void tui_menu_render(tui_menu *m) {
   tui_size();
   tui_clear(b);
   draw_header(b, m->title, m->status);
-  int rows = T.h - 4; /* header(2) + filter + footer */
+  int rows = T.h - 5; /* reserve the filter line and two footer rows */
   if (rows < 1) rows = 1;
   int total = menu_filtered_count(m);
   int nth = menu_nth_of(m, m->sel);
@@ -502,14 +590,21 @@ void tui_menu_render(tui_menu *m) {
   /* filter / status line */
   tui_at(b, T.h - 2, 1);
   sb_adds(b, "\033[K");
-  if (m->filter_on) {
-    sb_adds(b, tui_style(ST_MUTED));
-    sb_adds(b, m->filter[0] ? " filter: " : " filter: ");
+  sb_adds(b, tui_style(ST_MUTED));
+  sb_adds(b, " filter: ");
+  sb_adds(b, ST_RESET);
+  if (m->filter[0]) {
+    sb_adds(b, m->filter_on ? tui_style(ST_ACCENT) : tui_style(ST_DIM));
+    sb_adds(b, m->filter);
     sb_adds(b, ST_RESET);
-    sb_adds(b, m->filter[0] ? m->filter : tui_style(ST_DIM));
-    if (!m->filter[0]) sb_adds(b, gg_tr("type to search", "输入以搜索"));
+  } else {
+    sb_adds(b, tui_style(ST_DIM));
+    sb_adds(b, gg_tr("type to search", "输入以搜索"));
     sb_adds(b, ST_RESET);
-    sb_addf(b, "%s  (%d/%d)%s", tui_style(ST_MUTED), total, m->n, ST_RESET);
+  }
+  sb_addf(b, "%s  (%d/%d)%s", tui_style(ST_MUTED), total, m->n, ST_RESET);
+  if (!m->filter_on) {
+    sb_addf(b, "%s  [tab to filter]%s", tui_style(ST_DIM), ST_RESET);
   }
   draw_footer(b, m->footer ? m->footer
                            : gg_tr("\xe2\x86\x91\xe2\x86\x93 move  \xe2\x86\xb5 run  "
@@ -520,6 +615,8 @@ void tui_menu_render(tui_menu *m) {
   if (m->filter_on) {
     tui_at(b, T.h - 2, 11 + gg_width(m->filter));
     sb_adds(b, CUR_SHOW);
+  } else {
+    sb_adds(b, CUR_HIDE);
   }
   tui_flush(b);
 }
@@ -549,7 +646,7 @@ int tui_menu_key(tui_menu *m, int key) {
       if (nth >= total) nth = total ? total - 1 : 0;
       break;
     case KEY_BACKSPACE:
-      if (m->filter[0]) {
+      if (m->filter_on && m->filter[0]) {
         size_t n = strlen(m->filter);
         n = gg_utf8_prev(m->filter, n);
         m->filter[n] = 0;
@@ -559,7 +656,7 @@ int tui_menu_key(tui_menu *m, int key) {
       if (total) return 1;
       return 0;
     default:
-      if (key >= 32 && key != KEY_BACKSPACE && key < KEY_UP) {
+      if (m->filter_on && key >= 32 && key != KEY_BACKSPACE && key < KEY_UP) {
         size_t n = strlen(m->filter);
         if (n < sizeof(m->filter) - 5) {
           char tmp[4];
@@ -577,6 +674,13 @@ int tui_menu_key(tui_menu *m, int key) {
   return 0;
 }
 
+static long long tui_clock_ms(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+  return (long long)time(0) * 1000;
+}
+
 int tui_menu_run(tui_menu *m, int *other_key) {
   if (other_key) *other_key = 0;
   if (!T.interactive) {
@@ -592,12 +696,43 @@ int tui_menu_run(tui_menu *m, int *other_key) {
       if (gg_streq(gg_trim(line), m->items[i])) return i;
     return -1;
   }
+  int last_click = -1;
+  long long last_click_ms = 0;
   tui_enter();
   for (;;) {
     tui_menu_render(m);
     int k = tui_key(-1);
     if (k == KEY_NONE) continue;
+    if (k == KEY_MOUSE) {
+      if (T_MOUSE.wheel && T_MOUSE.y >= 3 && T_MOUSE.y <= T.h - 3) {
+        tui_menu_key(m, T_MOUSE.wheel > 0 ? KEY_UP : KEY_DOWN);
+        continue;
+      }
+      if (!T_MOUSE.pressed || T_MOUSE.button != 0) continue;
+      if (T_MOUSE.y == T.h - 2) {
+        m->filter_on = 1;
+        continue;
+      }
+      if (T_MOUSE.y >= 3 && T_MOUSE.y <= T.h - 3) {
+        int idx = menu_filtered_index(m, m->scroll + T_MOUSE.y - 3);
+        if (idx < 0) continue;
+        long long now = tui_clock_ms();
+        if (idx == last_click && now - last_click_ms <= 450) {
+          tui_leave();
+          return idx;
+        }
+        m->sel = idx;
+        last_click = idx;
+        last_click_ms = now;
+      }
+      continue;
+    }
     if (k == KEY_ESC) {
+      if (m->filter_on) {
+        if (m->filter[0]) m->filter[0] = 0;
+        m->filter_on = 0;
+        continue;
+      }
       if (m->filter[0]) {
         m->filter[0] = 0;
         continue;
@@ -605,7 +740,7 @@ int tui_menu_run(tui_menu *m, int *other_key) {
       tui_leave();
       return -1;
     }
-    if (k == 'q' && !m->filter[0]) {
+    if (k == 'q' && !m->filter[0] && !m->filter_on) {
       tui_leave();
       return -1;
     }
@@ -619,10 +754,13 @@ int tui_menu_run(tui_menu *m, int *other_key) {
       m->filter_on = !m->filter_on;
       continue;
     }
-    if (!m->filter_on) {
-      if (other_key) *other_key = k;
-      tui_leave();
-      return -2;
+    if (!m->filter_on && k >= 32 && k < KEY_UP) {
+      if (other_key) {
+        *other_key = k;
+        tui_leave();
+        return -2;
+      }
+      continue;
     }
     tui_menu_key(m, k);
   }
@@ -682,6 +820,22 @@ static void ed_delete(editor *e) {
   memmove(e->buf + e->cur, e->buf + next, e->len - next);
   e->len -= next - e->cur;
   e->buf[e->len] = 0;
+}
+
+static size_t ed_offset_for_width(const char *s, size_t len, int wanted) {
+  size_t off = 0;
+  int width = 0;
+  while (off < len && width < wanted) {
+    uint32_t cp = 0;
+    int n = gg_utf8_decode(s + off, len - off, &cp);
+    if (n <= 0) break;
+    int cw = gg_wcwidth(cp);
+    if (cw < 0) cw = 1;
+    if (width + cw > wanted) break;
+    width += cw;
+    off += (size_t)n;
+  }
+  return off;
 }
 
 /* line/column helpers for the multiline editor */
@@ -755,6 +909,15 @@ int tui_prompt(const char *title, const char *label, char *buf, size_t cap,
     render_prompt(title, label, &ed_global, help);
     int k = tui_key(-1);
     editor *e = &ed_global;
+    if (k == KEY_MOUSE) {
+      if (T_MOUSE.pressed && T_MOUSE.button == 0 && T_MOUSE.y == 4) {
+        int base_col = 4 + gg_width(label ? label : "");
+        int wanted = T_MOUSE.x - base_col;
+        if (wanted < 0) wanted = 0;
+        e->cur = ed_offset_for_width(e->buf, e->len, wanted);
+      }
+      continue;
+    }
     switch (k) {
       case KEY_NONE: break;
       case KEY_ESC: tui_leave(); return -1;
@@ -872,6 +1035,16 @@ int tui_confirm(const char *title, const char *msg, int def) {
     draw_footer(b, gg_tr("y/n  enter confirm  esc cancel", "y/n  回车确认  esc 取消"));
     tui_flush(b);
     int k = tui_key(-1);
+    if (k == KEY_MOUSE) {
+      if (T_MOUSE.wheel) sel = !sel;
+      else if (T_MOUSE.pressed && T_MOUSE.button == 0 &&
+               T_MOUSE.y >= row && T_MOUSE.y < row + 2) {
+        sel = T_MOUSE.y - row;
+        tui_leave();
+        return sel == 0;
+      }
+      continue;
+    }
     if (k == 'y' || k == 'Y') {
       tui_leave();
       return 1;
@@ -970,8 +1143,10 @@ void tui_message(const char *title, const char *body) {
     draw_footer(b, gg_tr("up/down scroll  q close", "上下滚动  q 关闭"));
     tui_flush(b);
     int k = tui_key(-1);
-    if (k == 'q' || k == KEY_ESC || k == KEY_ENTER) break;
-    if (k == KEY_DOWN || k == 'j') scroll++;
+    if (k == KEY_MOUSE) {
+      if (T_MOUSE.wheel) scroll -= T_MOUSE.wheel * 3;
+    } else if (k == 'q' || k == KEY_ESC || k == KEY_ENTER) break;
+    else if (k == KEY_DOWN || k == 'j') scroll++;
     if (k == KEY_UP || k == 'k') scroll--;
     if (k == KEY_PGDN || k == ' ') scroll += rows;
     if (k == KEY_PGUP) scroll -= rows;
@@ -1112,7 +1287,8 @@ char *tui_textbox(const char *title, const char *filename, const char *text) {
     sbuf *b = &G_FRAME;
     tui_clear(b);
     draw_header(b, title, filename);
-    int rows = T.h - 3;
+    int rows = T.h - 4;
+    if (rows < 1) rows = 1;
     int currow, curcol;
     cursor_rc(e, e->cur, &currow, &curcol);
     if (currow < top) top = currow;
@@ -1162,6 +1338,28 @@ char *tui_textbox(const char *title, const char *filename, const char *text) {
     }
     tui_flush(b);
     int k = tui_key(-1);
+    if (k == KEY_MOUSE) {
+      if (T_MOUSE.pressed && T_MOUSE.button == 0 &&
+          T_MOUSE.y >= 3 && T_MOUSE.y < T.h - 1) {
+        int target_row = top + T_MOUSE.y - 3;
+        size_t start = 0;
+        for (int row = 0; row < target_row && start < e->len; row++) {
+          size_t end = line_end(e, start);
+          if (end >= e->len) {
+            start = e->len;
+            break;
+          }
+          start = end + 1;
+        }
+        size_t end = line_end(e, start);
+        int wanted = T_MOUSE.x - 6;
+        if (wanted < 0) wanted = 0;
+        e->cur = start + ed_offset_for_width(e->buf + start,
+                                              end - start, wanted);
+        if (e->cur > end) e->cur = end;
+      }
+      continue;
+    }
     switch (k) {
       case KEY_NONE: break;
       case KEY_ESC: {
@@ -1195,7 +1393,6 @@ char *tui_textbox(const char *title, const char *filename, const char *text) {
                           "ctrl-k  删除整行\n"
                           "ctrl-u  删除到行首\n"
                           "tab     插入两个空格"));
-        tui_enter();
         break;
       case KEY_BACKSPACE: ed_backspace(e); modified = 1; break;
       case KEY_DEL: ed_delete(e); modified = 1; break;
@@ -1357,6 +1554,22 @@ int tui_form(const char *title, const char *subtitle, tui_field *f, int n) {
                          "tab/回车 下一个  空格 切换   esc 返回  ctrl-s 执行"));
     tui_flush(b);
     int k = tui_key(-1);
+    if (k == KEY_MOUSE) {
+      if (T_MOUSE.wheel) {
+        cur += T_MOUSE.wheel > 0 ? -1 : 1;
+        if (cur < 0) cur = 0;
+        if (cur >= n) cur = n - 1;
+      } else if (T_MOUSE.pressed && T_MOUSE.button == 0) {
+        if (T_MOUSE.y >= 3 && T_MOUSE.y <= T.h - 2) {
+          int idx = scroll + T_MOUSE.y - 3;
+          if (idx >= 0 && idx < n) cur = idx;
+        } else if (T_MOUSE.y == T.h) {
+          tui_leave();
+          return 0;
+        }
+      }
+      continue;
+    }
     if (k == KEY_ESC) {
       tui_leave();
       return -1;

@@ -4,6 +4,8 @@
 [![release](https://img.shields.io/github/v/release/ejir/gg)](https://github.com/ejir/gg/releases)
 [![license](https://img.shields.io/badge/license-ISC-blue)](LICENSE)
 
+**English: [README.en.md](README.en.md)** · 中文文档
+
 `gg` 是一个**单文件跨平台二进制**（基于 [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) 的 Actually Portable Executable），
 内置 [Lua 5.4](https://www.lua.org/)，自带 TUI 组件，用来把你日常敲的一长串命令变成 `gg 名字`：
 
@@ -88,6 +90,13 @@ gg doctor      # 平台、目录、shell、已装工具、模块数量一览
 gg --version
 ```
 
+`gg active` 也会在 **bash / zsh / fish / PowerShell** 的启动配置中启用命令补全。
+补全覆盖内置命令、模块、注册命令、模块参数选项和常见子命令；手动加载时，bash/zsh 使用
+`eval "$(gg completion bash)"` / `eval "$(gg completion zsh)"`，fish 使用
+`gg completion fish | source`，PowerShell 使用 `gg completion powershell | Out-String | Invoke-Expression`。
+TUI 菜单支持鼠标滚轮与点击；单击选择、双击执行。过滤框中按 `Esc` 清空并移出焦点，
+再按一次返回；`Tab` 可在过滤框与列表间切换。
+
 ---
 
 ## 2. 三种用法 / three ways to use it
@@ -110,7 +119,8 @@ gg aria2c …             # 若都没有，等价于直接在 PATH 里找 aria2c
 其他内置命令：
 
 ```
-gg active [status|off|print]      PATH / shim 管理
+gg active [status|off|print]      PATH / shim / 命令补全管理
+gg completion [bash|zsh|fish|powershell] 输出补全脚本
 gg ls [--json]                    列出所有模块与注册命令
 gg show <name>                    详情 + 源码
 gg init <name> [--actions]        生成模块骨架并打开内置编辑器
@@ -180,6 +190,8 @@ $ gg aria2c              # 不带参数 → 自动生成 TUI 表单
 ```
 
 `gg aria2c https://…` 直接跑；`gg aria2c --help` 看用法；参数、布尔开关、枚举全都自动解析。
+如果系统没有 `aria2c`，模块会检测 apt/dnf/yum/pacman/zypper/apk/pkg/pkgin/pkg_add/brew/winget/Chocolatey/Scoop，
+询问是否用检测到的包管理器安装；默认选“否”，明确确认后才会运行安装命令。
 
 ---
 
@@ -310,6 +322,37 @@ gg mytool                    # 终端里跑 → 自动表单（tab 切换、空�
 gg mytool --help             # 用法
 ```
 
+### 自包含模块目录（模块自己携带辅助代码和资源）
+
+单个 `.lua` 适合小工具；较大的模块可以作为独立目录分发，不必把辅助文件塞进 gg 的全局目录：
+
+```text
+mytool/
+  mytool.lua       # 或 init.lua，返回 M 表
+  lib.lua          # 模块自己的 Lua helper
+  assets/config.json
+```
+
+```lua
+function M.run(ctx)
+  local helper = dofile(gg.join_path(ctx.module_dir, "lib.lua"))
+  local config = gg.read(gg.join_path(ctx.module_dir, "assets", "config.json"))
+  -- ...
+end
+```
+
+安装整个目录并保留相对路径：
+
+```sh
+gg modules install ./mytool       # 安装到 ~/.gg/modules/mytool
+gg mytool                         # 直接运行
+gg rm mytool                      # 确认后移除整个模块目录
+```
+
+目录入口必须是 `init.lua` 或 `<目录名>.lua`。自包含在这里指**模块自身的代码和资源可随模块目录携带**；
+如果还要把 gg/Lua 运行时也做成一个可直接分发的单文件应用，请使用下一节的 `gg bundle`。
+模块声明外部程序依赖时应先检查并询问安装；aria2c 示例会在缺少程序时给出安装选项。
+
 ### `ctx` / `gg` API 速查
 
 `ctx` 在模块里就是 `gg`（同一个表，`__index` 指向它），另外多了 `ctx.name / ctx.args / ctx.rest / ctx.argv / ctx.module`。
@@ -317,7 +360,7 @@ gg mytool --help             # 用法
 | 分类 | API |
 | --- | --- |
 | 执行 | `gg.run{argv={…}}`（前台、TUI 感知）、`gg.spawn{argv=…, capture=, on_line=, sudo=, cwd=, input=}`、`gg.capture(cmd)`、`gg.sh(cmd)`、`gg.exec{…}` |
-| 环境 | `gg.which(name)` `gg.have` `gg.getenv/setenv` `gg.cwd` `gg.platform`（os/arch/cpus/root/lang…）`gg.exe` `gg.dir` `gg.home` |
+| 环境 | `gg.which(name)` `gg.have` `gg.refresh_tools()`（安装程序后刷新 PATH 检测）`gg.getenv/setenv` `gg.cwd` `gg.platform`（os/arch/cpus/root/lang…）`gg.exe` `gg.dir` `gg.home`；模块上下文有 `ctx.module_dir` |
 | 文件 | `gg.exists` `gg.read/write` `gg.list` `gg.stat` `gg.mkdir` `gg.rm` `gg.copy` `gg.move` `gg.mkstemp` `gg.join_path` `gg.abs` `gg.basename/dirname/ext` |
 | 文本 | `gg.trim/split/join` `gg.str.quote` `gg.json.encode/decode` `gg.i18n(en, zh)` |
 | 交互 | `gg.confirm` `gg.ask` `gg.select` `gg.message` `gg.sleep` |

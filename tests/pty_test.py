@@ -128,11 +128,19 @@ def check(name, condition, detail=""):
 
 def make_env(root):
     home = os.path.join(root, "home")
+    fake_bin = os.path.join(root, "bin")
     os.makedirs(home, exist_ok=True)
+    os.makedirs(fake_bin, exist_ok=True)
+    # The bundled aria2c module now offers to install its external dependency.
+    # Keep the regular TUI tests deterministic by providing a harmless stub.
+    aria = os.path.join(fake_bin, "aria2c")
+    with open(aria, "w") as f:
+        f.write("#!/bin/sh\nexit 0\n")
+    os.chmod(aria, 0o755)
     return {
         "HOME": home,
         "GG_DIR": os.path.join(root, "gg"),
-        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PATH": fake_bin + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
     }
 
 
@@ -144,16 +152,90 @@ def test_dashboard(env):
     check("lists modules", "aria2c" in out and "apt" in out, out)
     check("lists quick actions", "enable gg on PATH" in out, out)
     check("shows the footer keys", "quit" in out, out)
-    out = s.send("\x1b[B")  # down
+    out = s.send("\t")
+    check("tab leaves the filter for the list", "tab: filter" in out, out)
+    out = s.send("\x1b[B")  # down while the list has focus
     check("arrow keys keep the ui alive", "gg" in out, out)
+    out = s.send("\t")  # return focus to the filter
     out = s.send("aria")
     check("filter narrows the list", "aria2c" in out, out)
     out = s.send("\r", wait=0.6)          # enter -> module tui
-    check("module tui opens", "new download" in out or "aria2c" in out, out)
-    out = s.send("\x1b", wait=0.4)        # esc -> back to dashboard
+    check("module tui opens", "new download" in out, out)
+    out = s.send("\x1b", wait=0.4)        # esc -> leave the menu filter
+    check("menu filter focus can be left", "tab to filter" in out, out)
+    out = s.send("q", wait=0.4)             # q -> return to dashboard
+    out = s.send("\x1b", wait=0.2)         # clear/unfocus dashboard filter
     out = s.send("q", wait=0.6)
+    exited = s.proc.poll() is not None
     s.close()
-    check("q quits", s.proc.poll() is not None or True, out)
+    check("q quits after leaving filter focus", exited, out)
+
+
+def test_dashboard_child_run():
+    print("\ndashboard child command (tty)")
+    env = make_env(tempfile.mkdtemp(prefix="gg-dashboard-child-"))
+    modules = os.path.join(env["GG_DIR"], "modules")
+    os.makedirs(modules, exist_ok=True)
+    with open(os.path.join(modules, "nestedrun.lua"), "w") as f:
+        f.write(
+            "local M = {}\n"
+            "M.title = 'nested run'\n"
+            "function M.tui(ctx)\n"
+            "  ctx.exec({ argv = { 'sh', '-c', 'printf exec-ok' } })\n"
+            "  ctx.run({ argv = { 'sh', '-c', 'printf child-ok' } })\n"
+            "  return 0\n"
+            "end\n"
+            "return M\n")
+    s = Session([GG], env=env)
+    s.drain(1.0)
+    out = s.send("nestedrun", wait=0.2)
+    out = s.send("\r", wait=0.8)
+    check("module commands run outside the dashboard", "exec-ok" in out and
+          "child-ok" in out and "press enter to go back" in out, out)
+    out = s.send("\r", wait=0.3)
+    check("dashboard returns after the child command", "nestedrun" in out, out)
+    s.send("\x1b", wait=0.2)  # leave the filter field
+    s.send("q", wait=0.5)
+    exited = s.proc.poll() is not None
+    s.close()
+    check("dashboard remains interactive", exited, out)
+
+
+def test_mouse_menu(env):
+    print("\nmouse menu (tty)")
+    s = Session([GG, "demo"], env=env)
+    out = s.drain(1.0)
+    check("menu is available for mouse input", "platform info" in out, out)
+    click = b"\x1b[<0;10;3M"  # SGR left click, first menu row
+    s.send(click, wait=0.05)
+    out = s.send(click, wait=0.5)  # double click runs the selected row
+    check("double click runs a menu item", "os" in out and "arch" in out, out)
+    s.send("q", wait=0.3)
+    exited = s.proc.poll() is not None
+    s.close()
+    check("mouse-opened view closes", exited, out)
+
+
+def test_missing_dependency(env):
+    print("\nmissing module dependency (tty)")
+    root = tempfile.mkdtemp(prefix="gg-dependency-")
+    bin_dir = os.path.join(root, "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    marker = os.path.join(root, "install-was-run")
+    installer = os.path.join(bin_dir, "apt-get")
+    with open(installer, "w") as f:
+        f.write("#!/bin/sh\nprintf called > '" + marker + "'\nexit 0\n")
+    os.chmod(installer, 0o755)
+    test_env = dict(env)
+    test_env["PATH"] = bin_dir
+    s = Session([GG, "aria2c", "https://example.invalid/file"], env=test_env)
+    out = s.drain(1.0)
+    check("asks before installing a missing program", "Install it now using apt?" in out, out)
+    out = s.send("n", wait=1.0)
+    exited = s.proc.poll() is not None
+    check("declining the install is safe", "installation skipped" in out and not os.path.exists(marker), out)
+    s.close()
+    check("declined command exits", exited, out)
 
 
 def test_module_form(env):
@@ -213,6 +295,7 @@ def test_module_tui_form(env):
     check("lua form renders its fields", "URL" in out and "insecure" in out, out)
     out = s.send("\x1b", wait=0.6)  # esc -> back to the module menu
     check("esc returns to the menu", "new download" in out, out)
+    s.send("\x1b", wait=0.2)  # leave the filter field
     s.send("q", wait=0.3)
     s.close()
 
@@ -265,9 +348,12 @@ def test_editor(env):
     s = Session([GG, "edit", "scratch"], env=env)
     out = s.drain(1.2)
     check("editor shows the source", "local M" in out, out)
-    out = s.send("-- hello from the pty test\n")
+    out = s.send(b"\x1b[<0;6;3M")  # click at the start of the first line
+    out = s.send("-- inserted by mouse\r")
+    out = s.send("-- hello from the pty test\r")
     out = s.send("\x13", wait=0.8)  # ctrl-s saves
     saved = open(path).read()
+    check("mouse click moves the editor cursor", saved.startswith("-- inserted by mouse\n"), out)
     check("ctrl-s saved the buffer", "-- hello from the pty test" in saved, out)
     s.close()
 
@@ -277,6 +363,9 @@ def main():
     env = make_env(root)
     print(f"gg tty tests — {GG}\nwork dir: {root}")
     test_dashboard(env)
+    test_dashboard_child_run()
+    test_mouse_menu(env)
+    test_missing_dependency(env)
     test_module_form(env)
     test_form_and_back(env)
     test_progress(env)

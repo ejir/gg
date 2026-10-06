@@ -178,6 +178,12 @@ static int l_have(lua_State *l) {
   return 1;
 }
 
+static int l_refresh_tools(lua_State *l) {
+  (void)l;
+  gg_which_clear();
+  return 0;
+}
+
 static int l_cwd(lua_State *l) {
   char buf[PATH_MAX];
   if (!getcwd(buf, sizeof(buf))) snprintf(buf, sizeof(buf), ".");
@@ -402,7 +408,7 @@ static int spawn_common(lua_State *l, int interactive_run) {
   if (interactive_run) {
     int pause = opt_bool(l, 1, "pause", 1);
     int was_alt = T.interactive && T.in_alt;
-    if (was_alt) tui_leave();
+    if (was_alt) tui_suspend();
     proc_echo_cmd(sv_argv(&argv));
     int rc = proc_run(sv_argv(&argv), &o, 0);
     if (was_alt) {
@@ -415,7 +421,7 @@ static int spawn_common(lua_State *l, int interactive_run) {
         while ((c = getchar()) != '\n' && c != EOF) {
         }
       }
-      tui_enter();
+      tui_resume();
     }
     lua_pushboolean(l, rc == 0);
     lua_pushinteger(l, rc);
@@ -525,13 +531,15 @@ static int l_exec(lua_State *l) {
   lua_pop(l, 1);
   int shell = opt_bool(l, 1, "shell", 0);
   int sudo = opt_bool(l, 1, "sudo", 0);
-  if (T.in_alt) tui_leave();
+  int was_alt = T.interactive && T.in_alt;
+  if (was_alt) tui_suspend();
   spawn_opts o;
   spawn_opts_init(&o);
   o.sudo = sudo;
   o.shell = shell;
   int rc = proc_run(sv_argv(&argv), &o, 0);
   sv_free(&argv);
+  if (was_alt) tui_resume();
   lua_pushinteger(l, rc);
   return 1;
 }
@@ -1615,6 +1623,7 @@ static const luaL_Reg gg_funcs[] = {
     {"ok", l_ok},            {"print", l_print_stdout},
     {"getenv", l_getenv},    {"setenv", l_setenv},
     {"which", l_which},      {"have", l_have},
+    {"refresh_tools", l_refresh_tools},
     {"cwd", l_cwd},          {"sleep", l_sleep},
     {"now", l_now},          {"exists", l_exists},
     {"is_dir", l_is_dir},    {"is_file", l_is_file},
@@ -2578,6 +2587,10 @@ int lua_run_module(const char *name, int argc, char **argv, int force_tui) {
   int ctx_idx = lua_gettop(L);
   lua_pushstring(L, name);
   lua_setfield(L, ctx_idx, "name");
+  char *module_dir = path ? gg_dirname_of(path) : gg_strdup("");
+  lua_pushstring(L, module_dir);
+  lua_setfield(L, ctx_idx, "module_dir");
+  free(module_dir);
   lua_pushvalue(L, args_idx);
   lua_setfield(L, ctx_idx, "args");
   lua_pushvalue(L, rest_idx);
