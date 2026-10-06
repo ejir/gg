@@ -354,14 +354,32 @@ static int l_chmod_x(lua_State *l) {
 
 static int l_mkstemp(lua_State *l) {
   const char *suffix = luaL_optstring(l, 1, "");
-  const char *dir = getenv("TMPDIR");
-  if (!dir || !*dir) dir = getenv("TEMP");
-  if (!dir || !*dir) dir = "/tmp";
+  const char *dir = luaL_optstring(l, 2, 0);
+  if (!dir || !*dir) {
+    dir = getenv("TMPDIR");
+    if (!dir || !*dir) dir = getenv("TEMP");
+    if (!dir || !*dir) dir = "/tmp";
+  }
   if (!gg_is_dir(dir)) dir = ".";
-  char *path = gg_asprintf("%s/gg-%d-%d%s", dir, (int)getpid(), (int)(time(0) % 100000),
-                           suffix);
-  FILE *f = fopen(path, "wb");
-  if (f) fclose(f);
+  for (const char *p = suffix; *p; p++) {
+    if (!(isalnum((unsigned char)*p) || *p == '.' || *p == '_' || *p == '-'))
+      return luaL_error(l, "mkstemp suffix may only contain letters, digits, dot, underscore or dash");
+  }
+  static unsigned int serial;
+  char *path = 0;
+  int fd = -1;
+  for (int tries = 0; tries < 32; tries++) {
+    path = gg_asprintf("%s/gg-%d-%u%s", dir, (int)getpid(), ++serial, suffix);
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd >= 0 || errno != EEXIST) break;
+    free(path);
+    path = 0;
+  }
+  if (fd >= 0) close(fd);
+  if (fd < 0) {
+    free(path);
+    return luaL_error(l, "could not create temporary file: %s", strerror(errno));
+  }
   lua_pushstring(l, path);
   free(path);
   return 1;
@@ -660,6 +678,22 @@ static int l_i18n(lua_State *l) {
   const char *en = luaL_checkstring(l, 1);
   const char *zh = luaL_optstring(l, 2, en);
   lua_pushstring(l, gg_lang_zh() ? zh : en);
+  return 1;
+}
+
+static int l_sha256(lua_State *l) {
+  size_t len = 0;
+  const char *data = luaL_checklstring(l, 1, &len);
+  unsigned char digest[32];
+  char hex[65];
+  static const char digits[] = "0123456789abcdef";
+  gg_sha256(data, len, digest);
+  for (size_t i = 0; i < sizeof(digest); i++) {
+    hex[i * 2] = digits[digest[i] >> 4];
+    hex[i * 2 + 1] = digits[digest[i] & 0x0f];
+  }
+  hex[64] = 0;
+  lua_pushstring(l, hex);
   return 1;
 }
 
@@ -1645,6 +1679,7 @@ static const luaL_Reg gg_funcs[] = {
     {"open", l_open},        {"style", l_style},
     {"colorize", l_colorize},{"json_encode", l_json_encode},
     {"json_decode", l_json_decode}, {"platform", l_platform},
+    {"sha256", l_sha256},
     {0, 0},
 };
 
@@ -1718,6 +1753,8 @@ void lua_register_gg(lua_State *l) {
 static void push_gg_table(lua_State *l) {
   lua_newtable(l);
   luaL_setfuncs(l, gg_funcs, 0);
+  lua_pushstring(l, GG_MODULES_INDEX_SHA256);
+  lua_setfield(l, -2, "module_registry_hash");
 
   /* aliases with nicer names */
   lua_getfield(l, -1, "which");

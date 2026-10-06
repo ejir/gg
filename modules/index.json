@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "name": "gg-modules",
+  "packages": [
+    {
+      "name": "hello-world",
+      "version": "1.0.0",
+      "description": "A tiny registry example that greets a name.",
+      "file": "modules/hello-world/1.0.0.lua",
+      "sha256": "62b2435b120ce0e7407250904bff4bba6246471d63b94d56dd02d5415faf4949",
+      "permissions": [],
+      "license": "ISC"
+    },
+    {
+      "name": "platform-info",
+      "version": "1.0.0",
+      "description": "Print the operating system and architecture reported by gg.",
+      "file": "modules/platform-info/1.0.0.lua",
+      "sha256": "b886f086c8ad6f4e1a79deb2b1491cbade58138ca5af924afd7111712e35e33e",
+      "permissions": [],
+      "license": "ISC"
+    }
+  ]
+}

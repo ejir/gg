@@ -63,7 +63,10 @@ check "help"               "usage"            "$GG" help
 check "eval"               "42"               "$GG" -e 'print(6*7)'
 check "lua stdlib"         "Lua 5.4"          "$GG" -e 'print(_VERSION)'
 check "json encode"        '"a":1'             "$GG" -e 'print(gg.json.encode({a=1}))'
-check "json decode"        "2"                 "$GG" -e 'local t=gg.json.decode("{\"b\":2}"); print(t.b)'
+check "json decode"       "2"                 "$GG" -e 'local t=gg.json.decode("{\"b\":2}"); print(t.b)'
+check "sha256"            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" "$GG" -e 'print(gg.sha256("abc"))'
+check "sha256 multi-block" "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3" "$GG" -e 'print(gg.sha256(string.rep("a",1000)))'
+check "mkstemp is unique and supports a directory" "ok" "$GG" -e 'local a=gg.mkstemp(".tmp", gg.dir); local b=gg.mkstemp(".tmp", gg.dir); print(a~=b and gg.is_file(a) and gg.is_file(b) and "ok" or "bad"); gg.rm(a); gg.rm(b)'
 check "platform table"     "linux"             "$GG" -e 'print(gg.platform.os)'
 check "shell quote"        "a b"               "$GG" -e 'print(gg.str.quote("a b"))'
 check "capture"            "hello"             "$GG" -e 'print(gg.capture("echo hello"))'
@@ -72,13 +75,126 @@ check "tui.form fields"    "u 16 true b"       "$GG" -e 'local f=gg.tui.form({ti
 check "tui.menu cancel"    "nil"               "$GG" -e 'print(tostring(gg.tui.menu({title="t",items={"a","b"}})))'
 check "completion script" "_gg_complete"       "$GG" completion bash
 check "completion names"  "aria2c"            "$GG" __complete ar
+check "module registry completion" "search"     "$GG" __complete modules s
 check "completion flags"  "--jobs"            "$GG" __complete -- aria2c --jo
 check "refresh PATH cache" "function:"        "$GG" -e 'print(gg.refresh_tools)'
 
 echo
 echo "modules"
 check "ls shows builtins"  "aria2c"            "$GG" ls
-check "apt module"         "package manager"   "$GG" ls
+check "setup module"       "Cross-distro package manager" "$GG" ls
+check "setup help"         "mirrors"           "$GG" setup --help
+check "setup status"       "Package manager:"  "$GG" setup status
+
+# Verify distro selection dispatches to a stubbed native package manager, never the host package database.
+if [ -r /etc/os-release ]; then
+  . /etc/os-release
+  setup_pm=""
+  setup_action=""
+  case " ${ID:-} ${ID_LIKE:-} " in
+    *" debian "*|*" ubuntu "*|*" linuxmint "*) setup_pm=apt-get; setup_action=update ;;
+    *" fedora "*|*" rhel "*|*" centos "*|*" rocky "*|*" almalinux "*)
+      if command -v dnf >/dev/null 2>&1; then setup_pm=dnf; setup_action=makecache
+      elif command -v yum >/dev/null 2>&1; then setup_pm=yum; setup_action=makecache; fi ;;
+  esac
+  if [ -n "$setup_pm" ]; then
+    FAKE_PM="$WORK/fake-package-manager"
+    mkdir -p "$FAKE_PM"
+    cat > "$FAKE_PM/$setup_pm" <<'SH'
+#!/bin/sh
+printf 'fake-pm:%s\n' "$*"
+SH
+    chmod +x "$FAKE_PM/$setup_pm"
+    cat > "$FAKE_PM/sudo" <<'SH'
+#!/bin/sh
+exec "$@"
+SH
+    chmod +x "$FAKE_PM/sudo"
+    check "setup dispatches to $setup_pm" "fake-pm:$setup_action" env PATH="$FAKE_PM:$PATH" "$GG" setup update
+    check "setup forwards package names" "fake-pm:install -y git curl" env PATH="$FAKE_PM:$PATH" "$GG" setup install git curl
+  fi
+fi
+
+# A fake curl keeps mirror-speed tests deterministic and never touches real sources.
+FAKE_CURL="$WORK/fake-curl"
+mkdir -p "$FAKE_CURL"
+cat > "$FAKE_CURL/curl" <<'SH'
+#!/bin/sh
+printf 'GG_RESULT:200:0.005:2097152'
+SH
+chmod +x "$FAKE_CURL/curl"
+check "mirror speed probe offers tested choices" "Choose a reachable mirror explicitly" env PATH="$FAKE_CURL:$PATH" "$GG" setup mirrors
+
+# Exercise the online registry with a fake transport. No network or user files are touched.
+REGISTRY_FIXTURES="$WORK/registry-fixtures"
+mkdir -p "$REGISTRY_FIXTURES"
+cp -R modules "$REGISTRY_FIXTURES/modules"
+FAKE_REGISTRY_CURL="$WORK/fake-registry-curl"
+mkdir -p "$FAKE_REGISTRY_CURL"
+cat > "$FAKE_REGISTRY_CURL/curl" <<'SH'
+#!/bin/sh
+dest=
+url=
+writeout=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output|-o) dest=$2; shift 2 ;;
+    --write-out|-w) writeout=1; shift 2 ;;
+    https://*) url=$1; shift ;;
+    *) shift ;;
+  esac
+done
+case "$url" in
+  *"/modules/index.json") file="$GG_TEST_REGISTRY_DIR/modules/index.json" ;;
+  *"/modules/"*".lua") rel=${url##*/main/}; file="$GG_TEST_REGISTRY_DIR/$rel" ;;
+  *) file=; status=404 ;;
+esac
+case "$url" in
+  *gh-proxy.com*) elapsed=0.010 ;;
+  *ghfast.top*) elapsed=0.020 ;;
+  *ghproxy.net*) status=502; elapsed=0.030 ;;
+  *) elapsed=0.050 ;;
+esac
+status=${status:-200}
+tamper=${GG_TEST_TAMPER_ALL:-0}
+if [ "${GG_TEST_TAMPER_FAST:-0}" = 1 ]; then
+  case "$url" in *gh-proxy.com*) tamper=1 ;; esac
+fi
+if [ "$status" = 200 ] && [ -n "$file" ] && [ -r "$file" ]; then
+  if [ "${GG_TEST_BAD_INDEX:-0}" = 1 ] && [ -z "$dest" ] && echo "$file" | grep -q 'index.json$'; then
+    printf '{"schema":1,"packages":[]}\n'
+  elif [ "$tamper" = 1 ] && [ -n "$dest" ] && echo "$file" | grep -q '\.lua$'; then
+    printf 'local M={}\nfunction M.run() print("tampered") return 0 end\nreturn M\n' > "$dest"
+  elif [ -n "$dest" ]; then
+    cat "$file" > "$dest"
+  else
+    cat "$file"
+  fi
+else
+  status=404
+fi
+if [ "$writeout" = 1 ]; then printf '\nGG_MODULE_FETCH:%s:%s\n' "$status" "$elapsed"; fi
+[ "$status" = 200 ]
+SH
+chmod +x "$FAKE_REGISTRY_CURL/curl"
+check "registry searches catalog" "hello-world" env PATH="$FAKE_REGISTRY_CURL:$PATH" GG_TEST_REGISTRY_DIR="$REGISTRY_FIXTURES" "$GG" modules search hello
+check_rc "modified registry index is rejected" 1 env PATH="$FAKE_REGISTRY_CURL:$PATH" GG_TEST_REGISTRY_DIR="$REGISTRY_FIXTURES" GG_TEST_BAD_INDEX=1 "$GG" modules search
+check "registry installs from fastest proxy" "Installed hello-world@1.0.0 via gh-proxy.com" env PATH="$FAKE_REGISTRY_CURL:$PATH" GG_TEST_REGISTRY_DIR="$REGISTRY_FIXTURES" GG_ASSUME_YES=1 "$GG" modules install hello-world
+check "registry module can be invoked online" "Hello, arena!" env PATH="$FAKE_REGISTRY_CURL:$PATH" GG_TEST_REGISTRY_DIR="$REGISTRY_FIXTURES" "$GG" modules run hello-world arena
+check_rc "registry install requires explicit confirmation" 1 env PATH="$FAKE_REGISTRY_CURL:$PATH" GG_TEST_REGISTRY_DIR="$REGISTRY_FIXTURES" "$GG" modules install platform-info
+if [ ! -e "$GG_DIR/modules/platform-info.lua" ]; then
+  pass=$((pass + 1)); printf '  \033[38;5;42mok\033[0m   declined registry module is not installed\n'
+else
+  fail=$((fail + 1)); printf '  \033[38;5;203mFAIL\033[0m declined registry module is not installed\n'
+fi
+check_rc "tampered module is rejected" 1 env PATH="$FAKE_REGISTRY_CURL:$PATH" GG_TEST_REGISTRY_DIR="$REGISTRY_FIXTURES" GG_TEST_TAMPER_ALL=1 GG_ASSUME_YES=1 "$GG" modules install platform-info
+if [ ! -e "$GG_DIR/modules/platform-info.lua" ]; then
+  pass=$((pass + 1)); printf '  \033[38;5;42mok\033[0m   tampered source is never installed\n'
+else
+  fail=$((fail + 1)); printf '  \033[38;5;203mFAIL\033[0m tampered source is never installed\n'
+fi
+check "bad fastest proxy falls back to the next hash-valid route" "Installed platform-info@1.0.0 via ghfast.top" env PATH="$FAKE_REGISTRY_CURL:$PATH" GG_TEST_REGISTRY_DIR="$REGISTRY_FIXTURES" GG_TEST_TAMPER_FAST=1 GG_ASSUME_YES=1 "$GG" modules install platform-info
+
 check "hello module runs"  "hello world."      "$GG" hello
 check "module params"      "hello tux!!!"      "$GG" hello tux -e
 check "module defaults"    "hello world."      "$GG" hello

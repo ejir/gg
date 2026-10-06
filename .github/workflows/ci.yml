@@ -6,7 +6,34 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  module-security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: build host binary for syntax-only checks
+        run: make host
+      - name: fetch PR base for immutable package checks
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      - name: validate registry, hashes, Lua syntax, and risk policy
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            python3 scripts/check-modules.py --gg build/gg-host --base-ref "$BASE_SHA"
+          else
+            python3 scripts/check-modules.py --gg build/gg-host
+          fi
+          python3 tests/module_security_test.py
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
   test:
     runs-on: ubuntu-latest
     steps:

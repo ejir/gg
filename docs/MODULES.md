@@ -15,8 +15,12 @@ M.actions = { … }             -- 可选：动作菜单（和 M.tui 二选一�
 return M
 ```
 
+在线 registry：`gg modules search [关键词]`、`info <名字>`、`install <名字[@版本]>`、
+`update <名字>`、`run <名字[@版本]> [参数…]`。仓库索引及样例包见 [`modules/README.md`](../modules/README.md)。
+安装前需要确认；索引哈希锚定在 gg 构建中、脚本按 SHA-256 校验。模块不是沙箱，执行前应检查源码。
+
 内置示例（`gg modules install-examples` 可落盘到 `~/.gg/modules`）：
-`hello.lua`（最小示例）、`aria2c.lua`（参数 + 自定义 TUI）、`apt.lua`（动作菜单 + 自动识别包管理器）、
+`hello.lua`（最小示例）、`aria2c.lua`（参数 + 自定义 TUI）、`setup.lua`（跨发行版包管理、测速换源 + nvm/uv 安装）、
 `demo.lua`（各个 TUI 组件演示）。
 
 ### 自包含模块目录
@@ -164,7 +168,7 @@ if text then gg.write(path, text) end   -- 取消返回 nil
 ### 进度条 / 实时日志
 
 ```lua
-local bar = ctx.tui.progress({ title = "安装中", subtitle = "apt" })
+local bar = ctx.tui.progress({ title = "安装中", subtitle = "setup" })
 bar:set(42, "正在解包")        -- 0..100，第二个参数是当前状态行
 bar:log("Get:1 http://… 1.2 MB")  -- 追加到滚动日志
 bar:done(true, "完成")          -- 必须调用（或让它被 GC 回收）
@@ -185,15 +189,15 @@ ctx.tui.confirm("要撤销吗？")     -- 是/否
 
 ## 4. `M.actions` —— 动作菜单
 
-适合「一堆固定子命令」的工具（apt、brew、systemctl、docker…）：gg 会自动渲染菜单，
+适合「一堆固定子命令」的工具（系统包管理器、brew、systemctl、docker…）：gg 会自动渲染菜单，
 缺的参数会先弹输入框，`{name}` 占位符用参数值替换。
 
 ```lua
 M.actions = {
-  { name = "update",  desc = "刷新索引",  cmd = { "apt", "update" }, sudo = true },
-  { name = "install", desc = "安装",      cmd = { "apt", "install", "-y", "{pkgs}" },
+  { name = "update",  desc = "刷新索引",  cmd = { "package-manager", "update" }, sudo = true },
+  { name = "install", desc = "安装",      cmd = { "package-manager", "install", "-y", "{pkgs}" },
     sudo = true, params = { "pkgs" } },
-  { name = "list",    desc = "列出已装",  cmd = "apt list --installed" },  -- 字符串也行（走 shell）
+  { name = "list",    desc = "列出已装",  cmd = "package-manager list --installed" },  -- 字符串也行（走 shell）
 }
 M.params = {
   { name = "pkgs", type = "string", label = "包名" },
@@ -223,12 +227,13 @@ M.params = {
 
 `gg.exists` `gg.is_dir` `gg.is_file` `gg.mkdir` `gg.read` `gg.write` `gg.list(dir[, full_path])`
 `gg.stat`（`size/mtime/is_dir/is_file`）`gg.rm(path[, {recursive=true}])` `gg.copy` `gg.move`
-`gg.chmod_x` `gg.mkstemp(suffix)` `gg.join_path` `gg.abs` `gg.basename` `gg.dirname` `gg.ext`
+`gg.chmod_x` `gg.mkstemp(suffix[, dir])` `gg.join_path` `gg.abs` `gg.basename` `gg.dirname` `gg.ext`
 `gg.cwd()` `gg.getenv/setenv` `gg.which(name)` `gg.have(name)` `gg.refresh_tools()`（清除已缓存的 PATH 检测，例如安装程序后）`gg.sleep(秒)` `gg.now()`
 
 ### 文本与数据
 
 `gg.trim` `gg.split(s, sep)` `gg.join(t, sep)` `gg.str.quote(s)`（shell 安全引号）
+`gg.sha256(text)`（完整性校验）
 `gg.json.encode(v)` / `gg.json.decode(s)`（空表编码成 `{}`，数组保持数组）
 `gg.i18n(en, zh)`（按 `GG_LANG` / `LANG` 选一个）
 

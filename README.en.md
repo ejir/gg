@@ -10,7 +10,7 @@
 
 ```sh
 gg aria2c https://example.com/file.iso
-gg apt                         # package-manager menu
+gg setup                       # unified system setup menu
 gg mytool arg1                 # your own Lua module
 ```
 
@@ -60,7 +60,9 @@ gg init <name> [--actions]        scaffold a Lua module
 gg edit <name>                    edit a module in the built-in editor
 gg link <name>                    create a shell shim in ~/.gg/bin
 gg run <command line>             run a shell command
-gg modules install <path>         install a module file or self-contained folder
+gg modules search [query]          search the online module registry
+gg modules install <name|path>     install a verified registry package or local module
+gg modules run <name> [args]        install if needed, then invoke the module
 gg modules install-examples        install the bundled examples
 gg bundle app.gg <files...>        make a standalone gg application with bundled files
 gg config / doctor / upgrade      configuration, diagnostics, self-update
@@ -99,7 +101,43 @@ gg aria2c                     # opens the TUI form/menu
 
 If `aria2c` is missing, gg checks for a supported package manager (apt, dnf, yum, pacman, zypper, apk, pkg, pkgin, pkg_add, Homebrew, winget, Chocolatey, or Scoop) and asks before installing. The default answer is **No**; installation is only run after explicit confirmation. The module forwards download arguments to `aria2c` and supports a TUI form when invoked interactively.
 
+## Example: unified system setup
+
+`examples/setup.lua` provides one entry point for common package-manager actions, mirror testing/switching, and the `nvm` / `uv` developer tools:
+
+```sh
+gg setup                         # interactive menu
+gg setup install git curl        # install packages
+gg setup update                  # uses apt-get, dnf, yum, etc. for this OS
+gg setup mirrors                 # test mirrors, then choose interactively
+gg setup mirror ustc             # select a reachable mirror by key
+gg setup nvm                     # if missing, ask before installing nvm
+gg setup uv                      # if missing, ask before installing uv
+```
+
+The manager is selected using the distribution ID and available executables (Debian/Ubuntu use apt-get/apt; Fedora/RHEL-family use dnf/yum). Common alternatives such as pacman, zypper, apk, Homebrew, and winget are supported too. Safe mirror changes are currently implemented for Debian/Ubuntu, Fedora, Rocky, AlmaLinux, and CentOS Stream. Each repository metadata endpoint is tested first, and only reachable mirrors are offered. Changing sources always requires confirmation; every existing file that will be overwritten is copied to a same-directory `*.gg.bak.<timestamp>` backup **before** any write. If a supported source layout cannot be identified, gg leaves it untouched. Run `gg setup update` after switching; restore a source by copying its backup back to the original path. For unattended use, `GG_ASSUME_YES=1` is required in addition to an explicit mirror key.
+
+`nvm` and `uv` are checked before installation. Missing tools are installed only after an explicit confirmation. nvm uses the official nvm-sh repository (nvm-windows via winget on Windows); uv uses Astral's official installer on Linux/macOS and winget on Windows. Shell startup files are backed up before gg edits them.
+
 ## Writing modules
+
+### Online module registry
+
+The repository's [`modules/`](modules/) directory is a versioned Lua package catalog:
+
+```sh
+gg modules search download
+gg modules info hello-world
+gg modules install hello-world        # asks first; declining writes nothing
+gg modules install hello-world@1.0.0
+gg modules run hello-world Arena       # install if needed, then invoke it
+gg hello-world Arena                   # direct call after installation
+gg modules update hello-world
+```
+
+The client measures GitHub Raw and optional HTTPS accelerators (by default `gh-proxy.com`, `ghfast.top`, and `ghproxy.net`), prefers the fastest successful route, and retries tested routes on failure. Add proxy hostnames with `GG_GITHUB_PROXIES=host1,host2`. Proxies are transport only: each gg build pins the registry index SHA-256, and each script's SHA-256, size, and Lua syntax are checked before installation. Non-interactive installation is declined unless `GG_ASSUME_YES=1` is explicitly set.
+
+**Lua modules are not sandboxed.** Installation does not execute a script, but running one grants it the invoking user's permissions. Inspect its source and declared capabilities first. PR checks validate paths, versions, hashes, syntax, and suspicious patterns; CODEOWNERS requests maintainer review. Static checks cannot prove arbitrary code harmless, so enable **Require review from Code Owners** and make the `CI / module-security` status required in GitHub repository settings. See [`modules/README.md`](modules/README.md) for publishing a package.
 
 A basic module is a Lua file at `~/.gg/modules/<name>.lua` that returns a table:
 

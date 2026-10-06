@@ -52,6 +52,8 @@
 
 #define GG_VERSION "0.1.0"
 #define GG_URL "https://github.com/ejir/gg"
+/* Updated with modules/index.json; validated by scripts/check-modules.py. */
+#define GG_MODULES_INDEX_SHA256 "d35051a16f675cafbf202899c03664aadfecd0f7c0de9af4e376c526ececc629"
 #define GG_DIR_NAME ".gg"
 
 #ifndef PATH_MAX
@@ -110,6 +112,7 @@ char **sv_argv(strvec *s); /* NULL terminated view, points into s->v */
 /* ------------------------------------------------------------------ */
 
 int gg_streq(const char *a, const char *b);
+void gg_sha256(const void *data, size_t len, unsigned char out[32]);
 int gg_startswith(const char *s, const char *prefix);
 int gg_endswith(const char *s, const char *suffix);
 char *gg_trim(char *s);

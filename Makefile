@@ -19,7 +19,7 @@ BUILD     := build
 BIN       := bin
 
 # --- sources ---------------------------------------------------------------
-APP_SRC   := src/util.c src/tui.c src/proc.c src/registry.c src/modules.c \
+APP_SRC   := src/util.c src/sha256.c src/tui.c src/proc.c src/registry.c src/modules.c \
              src/bundle.c src/lua_api.c src/builtins.c src/completion.c src/main.c
 LUA_SRC   := $(wildcard vendor/lua/*.c)
 EMBED_SRC := $(BUILD)/embedded.c
@@ -101,10 +101,14 @@ release: ape
 GG ?= $(BUILD)/gg-host
 
 test: host
+	@python3 scripts/check-modules.py --gg $(GG)
+	@python3 tests/module_security_test.py
 	@sh tests/run.sh $(GG)
 	@python3 tests/pty_test.py $(GG)
 
 test-headless: host
+	@python3 scripts/check-modules.py --gg $(GG)
+	@python3 tests/module_security_test.py
 	@sh tests/run.sh $(GG)
 
 # --- install ---------------------------------------------------------------

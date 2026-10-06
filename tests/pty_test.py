@@ -149,7 +149,7 @@ def test_dashboard(env):
     s = Session([GG], env=env)
     out = s.drain(1.5)
     check("draws the header", "gg" in out and "one binary" in out, out)
-    check("lists modules", "aria2c" in out and "apt" in out, out)
+    check("lists modules", "aria2c" in out and "setup" in out, out)
     check("lists quick actions", "enable gg on PATH" in out, out)
     check("shows the footer keys", "quit" in out, out)
     out = s.send("\t")
@@ -214,6 +214,33 @@ def test_mouse_menu(env):
     exited = s.proc.poll() is not None
     s.close()
     check("mouse-opened view closes", exited, out)
+
+
+def test_setup_menu(env):
+    print("\nunified setup module menu (tty)")
+    s = Session([GG, "setup"], env=env)
+    out = s.drain(0.8)
+    check("setup menu has package actions", "Refresh package index" in out and "Install packages" in out, out)
+    check("setup menu offers mirror testing and dev tools", "Test mirror speed" in out and "nvm / uv" in out, out)
+    s.send("q", wait=0.3)
+    s.close()
+
+
+def test_setup_tool_confirmation(env):
+    print("\nsetup tool install confirmation (tty)")
+    test_env = dict(env)
+    # Isolate PATH and HOME so host-installed uv cannot affect the prompt test.
+    test_env["PATH"] = env["PATH"].split(os.pathsep)[0]
+    curl = os.path.join(test_env["PATH"], "curl")
+    with open(curl, "w") as f:
+        f.write("#!/bin/sh\\nexit 0\\n")
+    os.chmod(curl, 0o755)
+    s = Session([GG, "setup", "uv"], env=test_env)
+    out = s.drain(0.8)
+    check("missing uv asks before installation", "uv is not installed" in out and "official installer" in out, out)
+    out = s.send("n", wait=0.5)
+    check("declining uv install is safe", "Installation skipped" in out, out)
+    s.close()
 
 
 def test_missing_dependency(env):
@@ -365,6 +392,8 @@ def main():
     test_dashboard(env)
     test_dashboard_child_run()
     test_mouse_menu(env)
+    test_setup_menu(env)
+    test_setup_tool_confirmation(env)
     test_missing_dependency(env)
     test_module_form(env)
     test_form_and_back(env)

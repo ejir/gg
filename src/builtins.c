@@ -797,7 +797,7 @@ static const char *TEMPLATE_BASIC =
     "return M\n";
 
 static const char *TEMPLATE_ACTIONS =
-    "-- gg module with an action menu (handy for apt/brew/aria2 style tools)\n"
+    "-- gg module with an action menu (handy for package managers, brew, aria2)\n"
     "\n"
     "local M = {}\n"
     "M.title = \"%s\"\n"
@@ -1174,6 +1174,26 @@ static int modules_install_source(const char *input, int force) {
   return 0;
 }
 
+static int modules_install_is_local(const char *arg) {
+  if (!arg || !*arg) return 0;
+  if (arg[0] == '.' || arg[0] == '/' || arg[0] == '\\' || arg[0] == '~')
+    return 1;
+#if GG_WINDOWS
+  if (isalpha((unsigned char)arg[0]) && arg[1] == ':') return 1;
+#endif
+  if (gg_endswith(arg, ".lua") || gg_exists(arg)) return 1;
+  return 0;
+}
+
+static int modules_registry_action(const char *action) {
+  static const char *const actions[] = {
+      "catalog", "help", "info", "install", "list", "run", "search",
+      "test", "update", 0};
+  for (int i = 0; actions[i]; i++)
+    if (gg_streq(action, actions[i])) return 1;
+  return 0;
+}
+
 int cmd_modules(int argc, char **argv) {
   if (argc >= 1 && gg_streq(argv[0], "install")) {
     const char *source = 0;
@@ -1182,13 +1202,12 @@ int cmd_modules(int argc, char **argv) {
       if (arg_is_flag(argv[i], "-f", "--force")) force = 1;
       else if (!source) source = argv[i];
     }
-    if (!source) {
-      gg_error("%s", gg_tr("usage: gg modules install <file.lua|directory> [-f]",
-                           "用法: gg modules install <文件.lua|目录> [-f]"));
-      return 1;
-    }
+    if (!source || !modules_install_is_local(source))
+      return lua_run_module("modstore", argc, argv, 0);
     return modules_install_source(source, force);
   }
+  if (argc >= 1 && modules_registry_action(argv[0]))
+    return lua_run_module("modstore", argc, argv, 0);
   if (argc >= 1 && (gg_streq(argv[0], "install-examples") ||
                     gg_streq(argv[0], "examples"))) {
     int force = 0;

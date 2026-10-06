@@ -12,11 +12,11 @@
 ```
 # 以前 / before
 aria2c.exe -c -x 16 -s 16 -k 10M --disk-cache=128M --check-certificate=false <url>
-sudo apt update && sudo apt install -y build-essential
+sudo apt-get update && sudo apt-get install -y build-essential
 
 # 现在 / now
 gg aria2c <url>
-gg apt            # 打开菜单：update / install / remove / search …
+gg setup          # 统一包管理、测速换源、nvm / uv 工具安装
 ```
 
 同一个文件（`gg` / `gg.exe` / `gg.com`，字节完全相同）可以直接在
@@ -31,7 +31,7 @@ $ gg
  ⚙ 检查本机环境                   │ 模块 · aria2c
  ⚙ 写一个新模块                   │
  ⚙ 注册一条命令行                 │ 带推荐参数的 aria2c 封装，支持多链接、
- ◆ apt 包管理器 / package manager │ 断点续传和实时进度
+ ◆ setup 系统工具箱 / system setup │ 断点续传和实时进度
  ◆ aria2c aria2c 下载助手 / aria… │
  ◆ demo gg demo · 功能演示        │ ~/.gg/modules/aria2c.lua
  ◆ hello hello · 示例模块         │
@@ -111,7 +111,7 @@ TUI 菜单支持鼠标滚轮与点击；单击选择、双击执行。过滤框�
 ```
 gg                      # 面板
 gg aria2c https://...   # 模块
-gg apt                  # 模块（动作菜单）
+gg setup                # 模块（跨发行版系统工具箱）
 gg dl https://...       # 你注册的命令（gg add dl ...）
 gg aria2c …             # 若都没有，等价于直接在 PATH 里找 aria2c 执行
 ```
@@ -129,6 +129,9 @@ gg rm <name>                      删除模块或注册命令
 gg edit <name>                    内置编辑器（带 Lua 语法高亮 + 语法检查）
 gg link <name> / gg unlink       把模块/命令做成 shell 快捷命令（~/.gg/bin 里）
 gg run <命令行>                   通过 shell 执行（TUI 里会暂停界面、跑完按回车返回）
+gg modules search [关键词]       搜索在线脚本 registry
+gg modules install <名字|路径>   校验哈希后安装 registry 包或本地模块
+gg modules run <名字> [参数…]   未安装时询问安装，再调用模块
 gg modules install-examples       把内置示例模块写到 ~/.gg/modules
 gg bundle app.gg 模块.lua 资源/   自包含脚本：二进制 + 你的文件粘成一个（见第 5 节）
 gg config / gg doctor / gg upgrade
@@ -195,33 +198,24 @@ $ gg aria2c              # 不带参数 → 自动生成 TUI 表单
 
 ---
 
-## 4. 例子二：apt / 包管理器
+## 4. 例子二：统一系统工具箱 / cross-distro setup
 
-[`examples/apt.lua`](examples/apt.lua) 用「动作菜单」把常见操作列出来，并自动识别本机的
-`apt / apt-get / dnf / yum / pacman / zypper / brew / winget / choco`：
-
-```
-$ gg apt
- gg apt                                                                 esc to go back
-──────────────────────────────────────────────────────────────────────────────────────
- ▸ update           刷新软件源索引 / refresh the index
-   upgrade          升级所有已安装的包 / upgrade everything
-   install          安装软件包 / install packages
-   remove           卸载软件包 / remove packages
-   search           搜索软件包 / search
-   list             列出已安装 / list installed
-   clean            清理缓存 / clean the cache
-   autoremove       清理无用依赖 / autoremove
-```
-
-选中 `install` 会弹输入框问包名，然后执行 `sudo apt install -y <包名>`；
-`apt update && apt install` 这种日常操作从此不用记 sudo 和 `-y`。
-
-想让 `apt` 直接进入动作菜单，也可以做成 shell 快捷命令：
+[`examples/setup.lua`](examples/setup.lua) 把系统包管理、软件源测速/切换和开发工具安装放进同一个入口：
 
 ```sh
-gg link apt        # 之后直接敲：apt update / apt install foo
+gg setup                         # 交互菜单
+gg setup install git curl        # 安装软件包
+gg setup update                  # 刷新索引（apt-get / dnf / yum 等自动选择）
+gg setup mirrors                 # 测速后交互选择镜像
+gg setup mirror ustc             # 指定已测速可用的镜像，仍需确认
+gg setup nvm                     # 缺少时询问是否安装 nvm
+gg setup uv                      # 缺少时询问是否安装 uv
 ```
+
+按发行版优先选择 `apt-get/apt`、`dnf/yum`，并兼容 pacman、zypper、apk、Homebrew、winget 等。
+换源目前针对 Debian/Ubuntu、Fedora、Rocky、AlmaLinux 和 CentOS Stream 做安全配置；测速会先检查当前发行版对应的仓库元数据，只允许从可访问的源中选择。**只有明确确认后才会改源**，每个将被覆盖的现有文件都会在第一次写入前复制为同目录的 `*.gg.bak.<时间>` 备份；取消、备份失败或找不到受支持配置时不会覆盖源文件。完成后可运行 `gg setup update` 刷新索引，恢复时把相应备份文件复制回原路径。非交互执行需指定镜像 key，并额外设置 `GG_ASSUME_YES=1` 才会确认写入。
+
+`nvm` 与 `uv` 同样会先检查是否已安装，缺少时才询问。nvm 使用官方 nvm-sh Git 仓库（Windows 使用 nvm-windows/winget）；Linux/macOS 的 uv 使用 Astral 官方安装脚本，Windows 使用 winget。更新 shell 启动配置前会先在旁边留备份。
 
 ---
 
@@ -282,6 +276,25 @@ end
 ---
 
 ## 6. 写自己的模块 / writing modules
+
+### 在线模块 registry
+
+仓库的 [`modules/`](modules/) 目录是一个版本化脚本目录。先搜索/检查，再安装或直接调用：
+
+```sh
+gg modules search 下载
+gg modules info hello-world
+gg modules install hello-world       # 默认询问；拒绝时不会写入
+
+gg modules install hello-world@1.0.0
+gg modules run hello-world Arena      # 未安装时询问安装，然后运行
+gg hello-world Arena                 # 安装后也可直接调用
+gg modules update hello-world
+```
+
+gg 会测速 GitHub Raw 与可选 HTTPS 加速路由（默认 gh-proxy.com、ghfast.top、ghproxy.net），按响应速度优先并在失败时回退；`GG_GITHUB_PROXIES=host1,host2` 可追加代理主机。代理只负责传输，索引 SHA-256 固定在 gg 构建中，脚本安装前还会逐包校验 SHA-256、大小和 Lua 语法。非交互安装默认拒绝，只有明确设置 `GG_ASSUME_YES=1` 才接受。
+
+**安全提示：Lua 模块不是沙箱。** 安装不会自动运行脚本，但运行时脚本拥有当前用户权限；请先用 `gg modules info` 查看能力声明并检查源码。PR 会校验目录、版本、哈希、Lua 语法和危险模式，且 registry 由 CODEOWNERS 请求维护者审查；静态检查不能证明脚本无恶意，仓库设置还应启用“Require review from Code Owners”和必需的 `CI / module-security` 检查。添加包的步骤见 [`modules/README.md`](modules/README.md)。
 
 模块就是一个 Lua 文件，放在 `~/.gg/modules/<名字>.lua`，返回一个表：
 
@@ -361,8 +374,8 @@ gg rm mytool                      # 确认后移除整个模块目录
 | --- | --- |
 | 执行 | `gg.run{argv={…}}`（前台、TUI 感知）、`gg.spawn{argv=…, capture=, on_line=, sudo=, cwd=, input=}`、`gg.capture(cmd)`、`gg.sh(cmd)`、`gg.exec{…}` |
 | 环境 | `gg.which(name)` `gg.have` `gg.refresh_tools()`（安装程序后刷新 PATH 检测）`gg.getenv/setenv` `gg.cwd` `gg.platform`（os/arch/cpus/root/lang…）`gg.exe` `gg.dir` `gg.home`；模块上下文有 `ctx.module_dir` |
-| 文件 | `gg.exists` `gg.read/write` `gg.list` `gg.stat` `gg.mkdir` `gg.rm` `gg.copy` `gg.move` `gg.mkstemp` `gg.join_path` `gg.abs` `gg.basename/dirname/ext` |
-| 文本 | `gg.trim/split/join` `gg.str.quote` `gg.json.encode/decode` `gg.i18n(en, zh)` |
+| 文件 | `gg.exists` `gg.read/write` `gg.list` `gg.stat` `gg.mkdir` `gg.rm` `gg.copy` `gg.move` `gg.mkstemp(suffix[, dir])` `gg.join_path` `gg.abs` `gg.basename/dirname/ext` |
+| 文本 | `gg.trim/split/join` `gg.str.quote` `gg.json.encode/decode` `gg.sha256(text)` `gg.i18n(en, zh)` |
 | 交互 | `gg.confirm` `gg.ask` `gg.select` `gg.message` `gg.sleep` |
 | UI | `gg.tui.available()`、`gg.tui.menu{title,items}`、`gg.tui.form{title,fields}`、`gg.tui.textbox{title,text}`、`gg.tui.progress{title}` → `:set(pct,msg)` `:log(line)` `:done(ok,msg)` |
 | 注册表 | `gg.registry.add/list/remove/get`、`gg.modules.list/path/install_examples` |
