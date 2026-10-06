@@ -42,8 +42,12 @@ static void help_top(void) {
          c_reset(), gg_tr("create a shell shim", "创建 shell 快捷命令"));
   printf("  %srun%s <command line>      %s\n", c_accent(), c_reset(),
          gg_tr("run through the shell", "通过 shell 执行"));
-  printf("  %smodules%s install <dir>   %s\n", c_accent(), c_reset(),
-         gg_tr("install a self-contained module folder", "安装自包含模块目录"));
+  printf("  %smodules%s search [query]   %s\n", c_accent(), c_reset(),
+         gg_tr("search the hash-pinned online catalog", "搜索带哈希校验的在线目录"));
+  printf("  %smodules%s install <name|path> %s\n", c_accent(), c_reset(),
+         gg_tr("install a catalog package or local module", "安装 registry 模块或本地模块"));
+  printf("  %smodules%s run <name> [args] %s\n", c_accent(), c_reset(),
+         gg_tr("install if needed, then invoke the module", "未安装时询问安装，然后调用模块"));
   printf("  %smodules%s install-examples %s\n", c_accent(), c_reset(),
          gg_tr("copy the bundled example modules", "安装自带示例模块"));
   printf("  %sdoctor%s | %sconfig%s | %supgrade%s\n", c_accent(), c_reset(),
@@ -97,6 +101,13 @@ static void help_topic(const char *topic) {
     printf("\n%s%s%s\n", c_dim(),
            gg_tr("examples: gg modules install-examples", "示例: gg modules install-examples"),
            c_reset());
+    printf("\n%s\n", gg_tr(
+        "Online catalog: `gg modules search`, `info <name>`, `install <name>`, `update <name>`, `run <name>`.\n"
+        "The index hash is pinned in each gg build; source downloads are SHA-256 checked.\n"
+        "Review any module before running it: Lua modules are not sandboxed.",
+        "在线目录：`gg modules search`、`info <名字>`、`install <名字>`、`update <名字>`、`run <名字>`。\n"
+        "目录哈希固定在 gg 构建版本中；模块源码下载后会校验 SHA-256。\n"
+        "运行前请检查模块源码：Lua 模块没有沙箱隔离。"));
   } else if (gg_streq(topic, "lua") || gg_streq(topic, "api")) {
     printf("%sgg api%s (also reachable as `ctx.*` inside a module)\n\n", c_bold(),
            c_reset());

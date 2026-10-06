@@ -188,7 +188,9 @@ int cmd_complete(int argc, char **argv) {
     static const char *const active[] = {"status", "off", "print", 0};
     emit_words(active, prefix);
   } else if (gg_streq(root, "modules") || gg_streq(root, "module")) {
-    static const char *const modules[] = {"install", "install-examples", "path", 0};
+    static const char *const modules[] = {
+        "catalog", "help", "info", "install", "install-examples", "list",
+        "path", "run", "search", "test", "update", 0};
     emit_words(modules, prefix);
   } else if (gg_streq(root, "completion")) {
     static const char *const shells[] = {"bash", "zsh", "fish", "powershell", 0};

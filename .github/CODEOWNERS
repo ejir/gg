@@ -1,0 +1,6 @@
+# Keep the catalog, its trust anchor, and its validation rules under maintainer review.
+/modules/ @ejir
+/examples/modstore.lua @ejir
+/src/gg.h @ejir
+/scripts/check-modules.py @ejir
+/.github/workflows/ @ejir
