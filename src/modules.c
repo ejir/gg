@@ -63,6 +63,37 @@ static void mod_push2(const char *name, const char *path, int builtin,
   if (!m->desc) m->desc = gg_strdup("");
 }
 
+/* A user module in ~/.gg/modules shadows a built-in or bundled module.
+ * If a flat file and a self-contained directory share a name, the flat file
+ * is kept (the file pass runs first). */
+static void mod_add_user(const char *name, const char *source_path) {
+  for (int i = 0; i < g_n; i++) {
+    module_info *m = &g_mods[i];
+    if (!gg_streq(m->name, name)) continue;
+    if (m->builtin || m->bundled) {
+      free(m->title);
+      free(m->desc);
+      free(m->path);
+      m->path = gg_strdup(source_path);
+      m->builtin = 0;
+      m->bundled = 0;
+      m->is_tui = 0;
+      m->title = 0;
+      m->desc = 0;
+      size_t len = 0;
+      char *text = gg_read_file(source_path, &len);
+      if (text) {
+        mod_sniff(m, text);
+        free(text);
+      }
+      if (!m->title) m->title = gg_strdup(name);
+      if (!m->desc) m->desc = gg_strdup("");
+    }
+    return;
+  }
+  mod_push2(name, source_path, 0, 0, 0, 0);
+}
+
 static int mod_less_raw(const void *a, const void *b) {
   const module_info *x = a, *y = b;
   if (x->builtin != y->builtin) return x->builtin ? 1 : -1;
@@ -109,35 +140,34 @@ void modules_scan(void) {
         continue;
       }
       char *name = gg_strndup(de->d_name, strlen(de->d_name) - 4);
-      int replaced = 0;
-      for (int i = 0; i < g_n; i++) {
-        if (gg_streq(g_mods[i].name, name) && (g_mods[i].builtin || g_mods[i].bundled)) {
-          free(g_mods[i].title);
-          free(g_mods[i].desc);
-          free(g_mods[i].path);
-          g_mods[i].path = gg_strdup(full); /* `full` is freed below */
-          g_mods[i].builtin = 0;
-          g_mods[i].bundled = 0;
-          g_mods[i].title = 0;
-          g_mods[i].desc = 0;
-          /* re-sniff metadata from the user copy */
-          size_t len = 0;
-          char *text = gg_read_file(full, &len);
-          if (text) {
-            mod_sniff(&g_mods[i], text);
-            free(text);
-          }
-          if (!g_mods[i].title) g_mods[i].title = gg_strdup(name);
-          if (!g_mods[i].desc) g_mods[i].desc = gg_strdup("");
-          replaced = 1;
-          break;
-        }
-      }
-      if (!replaced) {
-        mod_push2(name, full, 0, 0, 0, 0);
-        free(name);
-      }
+      mod_add_user(name, full);
+      free(name);
       free(full);
+    }
+    closedir(d);
+  }
+  /* A self-contained module may be a directory with init.lua (or
+   * <directory-name>.lua), plus private helpers and assets beside it. */
+  d = opendir(dir);
+  if (d) {
+    struct dirent *de;
+    while ((de = readdir(d))) {
+      if (gg_streq(de->d_name, ".") || gg_streq(de->d_name, "..")) continue;
+      char *folder = gg_join(dir, de->d_name);
+      if (!gg_is_dir(folder)) {
+        free(folder);
+        continue;
+      }
+      char *source = gg_join(folder, "init.lua");
+      if (!gg_is_file(source)) {
+        free(source);
+        char *leaf = gg_asprintf("%s.lua", de->d_name);
+        source = gg_join(folder, leaf);
+        free(leaf);
+      }
+      if (gg_is_file(source)) mod_add_user(de->d_name, source);
+      free(source);
+      free(folder);
     }
     closedir(d);
   }

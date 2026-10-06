@@ -43,13 +43,85 @@ M.params = {
     label = "做种 / seed after download", help = "--seed-time" },
 }
 
+local installed_command
+
 local function find_aria2()
-  return gg.which("aria2c") or gg.which("aria2c.exe")
+  return installed_command or gg.which("aria2c") or gg.which("aria2c.exe")
+end
+
+local INSTALLERS = {
+  { bin = "apt-get", label = "apt", sudo = true,
+    argv = { "apt-get", "install", "-y", "aria2" } },
+  { bin = "dnf", label = "dnf", sudo = true,
+    argv = { "dnf", "install", "-y", "aria2" } },
+  { bin = "yum", label = "yum", sudo = true,
+    argv = { "yum", "install", "-y", "aria2" } },
+  { bin = "pacman", label = "pacman", sudo = true,
+    argv = { "pacman", "-S", "--noconfirm", "aria2" } },
+  { bin = "zypper", label = "zypper", sudo = true,
+    argv = { "zypper", "--non-interactive", "install", "aria2" } },
+  { bin = "apk", label = "apk", sudo = true,
+    argv = { "apk", "add", "aria2" } },
+  { bin = "pkg", label = "pkg", sudo = true,
+    argv = { "pkg", "install", "-y", "aria2" } },
+  { bin = "pkgin", label = "pkgin", sudo = true,
+    argv = { "pkgin", "-y", "install", "aria2" } },
+  { bin = "pkg_add", label = "pkg_add", sudo = true,
+    argv = { "pkg_add", "aria2" } },
+  { bin = "brew", label = "Homebrew", sudo = false,
+    argv = { "brew", "install", "aria2" } },
+  { bin = "winget", label = "winget", sudo = false,
+    argv = { "winget", "install", "--id", "aria2.aria2", "--exact",
+             "--accept-package-agreements", "--accept-source-agreements" } },
+  { bin = "choco", label = "Chocolatey", sudo = false,
+    argv = { "choco", "install", "aria2", "-y" } },
+  { bin = "scoop", label = "Scoop", sudo = false,
+    argv = { "scoop", "install", "aria2" } },
+}
+
+local function ensure_aria(ctx)
+  local bin = find_aria2()
+  if bin then return bin end
+
+  local installer
+  for _, candidate in ipairs(INSTALLERS) do
+    if gg.which(candidate.bin) then installer = candidate break end
+  end
+  if not installer then
+    ctx.err("aria2c 未安装，且未找到受支持的包管理器 / aria2c is missing and no supported package manager was found")
+    ctx.log("Debian/Ubuntu: sudo apt install aria2")
+    ctx.log("macOS: brew install aria2")
+    ctx.log("Windows: winget install aria2.aria2")
+    return nil
+  end
+
+  local question = gg.i18n(
+      "aria2c is not installed. Install it now using " .. installer.label .. "?",
+      "aria2c 尚未安装。现在使用 " .. installer.label .. " 安装吗？")
+  if not ctx.confirm(question, 0) then
+    ctx.warn("已跳过安装 / installation skipped; install aria2 manually to continue")
+    return nil
+  end
+
+  ctx.log("正在安装 aria2 / installing aria2 with %s", installer.label)
+  local ok, code = ctx.run({ argv = installer.argv, sudo = installer.sudo })
+  if not ok then
+    ctx.err("安装 aria2 失败 / aria2 installation failed (exit %s)", tostring(code))
+    return nil
+  end
+  gg.refresh_tools()
+  bin = find_aria2()
+  if not bin then
+    -- Some package managers update PATH or command shims only for new shells.
+    bin = gg.platform.os == "windows" and "aria2c.exe" or "aria2c"
+    installed_command = bin
+  end
+  return bin
 end
 
 function M.argv(ctx)
   local a = ctx.args
-  local bin = find_aria2()
+  local bin = ensure_aria(ctx)
   if not bin then return nil, "aria2c" end
   local argv = { bin }
   if a.resume ~= false then argv[#argv + 1] = "-c" end
@@ -96,6 +168,7 @@ function M.run(ctx)
 end
 
 function M.tui(ctx)
+  if not ensure_aria(ctx) then return 1 end
   while true do
     local sel = ctx.tui.menu({
       title = M.title,

@@ -2,6 +2,8 @@
  * doctor, help, version, modules, link, config, upgrade, exec, tui. */
 #include "gg.h"
 
+static int module_remove_tree(const char *path);
+
 /* ------------------------------------------------------------------ */
 /* small shared helpers                                                */
 /* ------------------------------------------------------------------ */
@@ -19,13 +21,13 @@ void gg_pause_key(const char *msg) {
 
 int run_shell_paused(const char *cmd) {
   int was_alt = T.interactive && T.in_alt;
-  if (was_alt) tui_leave();
+  if (was_alt) tui_suspend();
   gg_echo_line(cmd);
   int rc = proc_shell_run(cmd);
   if (was_alt) {
     gg_pause_key(gg_tr("-- done, press enter to go back",
                        "-- 完成，按回车返回"));
-    tui_enter();
+    tui_resume();
   }
   return rc;
 }
@@ -121,6 +123,7 @@ static char *active_block(const char *shell) {
     sb_addf(&b, "if not contains %s $PATH\n", p);
     sb_addf(&b, "    set -gx PATH %s $PATH\n", p);
     sb_adds(&b, "end\n");
+    sb_adds(&b, "if type -q gg\n    gg completion fish | source\nend\n");
   } else if (gg_streq(shell, "powershell")) {
     if (dflt)
       sb_adds(&b, "$ggbin = Join-Path $env:USERPROFILE '.gg\\bin'\n");
@@ -128,7 +131,9 @@ static char *active_block(const char *shell) {
       sb_addf(&b, "$ggbin = '%s'\n", bin);
     sb_adds(&b,
             "if (Test-Path $ggbin) { if ($env:PATH -notlike \"*$ggbin*\") "
-            "{ $env:PATH = \"$ggbin;$env:PATH\" } }\n");
+            "{ $env:PATH = \"$ggbin;$env:PATH\" } }\n"
+            "if (Get-Command gg -ErrorAction SilentlyContinue) { "
+            "Invoke-Expression (gg completion powershell | Out-String) }\n");
   } else {
     sb_addf(&b,
             "case \":$PATH:\" in\n"
@@ -137,6 +142,17 @@ static char *active_block(const char *shell) {
             "esac\n"
             "export PATH\n",
             p, p);
+    if (gg_streq(shell, "zsh")) {
+      sb_adds(&b,
+              "if command -v gg >/dev/null 2>&1; then\n"
+              "  eval \"$(gg completion zsh)\"\n"
+              "fi\n");
+    } else if (gg_streq(shell, "bash")) {
+      sb_adds(&b,
+              "if command -v gg >/dev/null 2>&1; then\n"
+              "  eval \"$(gg completion bash)\"\n"
+              "fi\n");
+    }
   }
   sb_addf(&b, "%s\n", BLOCK_END);
   return b.p;
@@ -573,10 +589,15 @@ int cmd_rm(int argc, char **argv) {
     }
     if (m && !m->builtin && m->path) {
       if (tui_confirm(gg_tr("delete module", "删除模块"), argv[i], 0)) {
-        if (unlink(m->path) == 0) {
-          gg_ok("%s %s", gg_tr("deleted", "已删除:"), m->path);
+        char *parent = gg_dirname_of(m->path);
+        int is_package = !gg_streq(parent, gg_modules_dir());
+        int removed = is_package ? module_remove_tree(parent) : unlink(m->path);
+        if (removed == 0) {
+          gg_ok("%s %s", gg_tr("deleted", "已删除:"),
+                is_package ? parent : m->path);
           done = 1;
         }
+        free(parent);
       } else {
         done = 1;
       }
@@ -982,13 +1003,13 @@ int cmd_run(int argc, char **argv) {
   reg_log("run", line);
   int rc;
   int was_alt = T.interactive && T.in_alt;
-  if (was_alt) tui_leave();
+  if (was_alt) tui_suspend();
   gg_echo_line(line);
   rc = proc_shell_run(line);
   if (was_alt) {
     gg_pause_key(gg_tr("-- done, press enter to go back",
                        "-- 完成，按回车返回"));
-    tui_enter();
+    tui_resume();
   }
   free(line);
   return rc;
@@ -1000,8 +1021,11 @@ int cmd_exec(int argc, char **argv) {
                          "用法: gg exec <命令> [参数...]"));
     return 1;
   }
-  if (T.in_alt) tui_leave();
-  return proc_exec(argv, 0);
+  int was_alt = T.interactive && T.in_alt;
+  if (was_alt) tui_suspend();
+  int rc = proc_exec(argv, 0);
+  if (was_alt) tui_resume();
+  return rc;
 }
 
 int cmd_tui(int argc, char **argv) {
@@ -1016,7 +1040,155 @@ int cmd_tui(int argc, char **argv) {
 /* modules / config / upgrade                                          */
 /* ------------------------------------------------------------------ */
 
+static int module_copy_tree(const char *src, const char *dst) {
+  if (gg_is_file(src)) return gg_copy_file(src, dst);
+  if (!gg_is_dir(src) || gg_mkdir_p(dst) != 0) return -1;
+  DIR *d = opendir(src);
+  if (!d) return -1;
+  int rc = 0;
+  struct dirent *de;
+  while ((de = readdir(d))) {
+    if (gg_streq(de->d_name, ".") || gg_streq(de->d_name, "..")) continue;
+    char *from = gg_join(src, de->d_name);
+    char *to = gg_join(dst, de->d_name);
+    if (module_copy_tree(from, to) != 0) rc = -1;
+    free(from);
+    free(to);
+    if (rc != 0) break;
+  }
+  closedir(d);
+  return rc;
+}
+
+static int module_remove_tree(const char *path) {
+  if (!gg_is_dir(path)) return unlink(path);
+  DIR *d = opendir(path);
+  if (!d) return -1;
+  int rc = 0;
+  struct dirent *de;
+  while ((de = readdir(d))) {
+    if (gg_streq(de->d_name, ".") || gg_streq(de->d_name, "..")) continue;
+    char *child = gg_join(path, de->d_name);
+    if (module_remove_tree(child) != 0) rc = -1;
+    free(child);
+    if (rc != 0) break;
+  }
+  closedir(d);
+  if (rc == 0 && rmdir(path) != 0) rc = -1;
+  return rc;
+}
+
+static int modules_install_source(const char *input, int force) {
+  char *src = gg_path_abs(input);
+  size_t n = strlen(src);
+  while (n > 1 && (src[n - 1] == '/' || src[n - 1] == '\\')) src[--n] = 0;
+  const char *base = gg_basename(src);
+  if (!*base || gg_streq(base, ".") || gg_streq(base, "..")) {
+    gg_error("%s", gg_tr("invalid module path", "模块路径无效"));
+    free(src);
+    return 1;
+  }
+
+  int directory = gg_is_dir(src);
+  if (!directory && (!gg_is_file(src) || !gg_endswith(base, ".lua"))) {
+    gg_error("%s", gg_tr("install expects a .lua file or a module directory",
+                         "install 需要 .lua 文件或模块目录"));
+    free(src);
+    return 1;
+  }
+  char *name = directory ? gg_strdup(base)
+                         : gg_strndup(base, strlen(base) - 4);
+  if (!*name || strchr(name, '/') || strchr(name, '\\') ||
+      gg_streq(name, ".") || gg_streq(name, "..")) {
+    gg_error("%s", gg_tr("invalid module name", "模块名无效"));
+    free(name);
+    free(src);
+    return 1;
+  }
+  if (directory) {
+    char *init = gg_join(src, "init.lua");
+    char *leaf = gg_asprintf("%s.lua", name);
+    char *named = gg_join(src, leaf);
+    free(leaf);
+    int valid = gg_is_file(init) || gg_is_file(named);
+    free(init);
+    free(named);
+    if (!valid) {
+      gg_error("%s", gg_tr("module directory needs init.lua or <name>.lua",
+                           "模块目录需要 init.lua 或 <目录名>.lua"));
+      free(name);
+      free(src);
+      return 1;
+    }
+  }
+
+  gg_mkdir_p(gg_modules_dir());
+  char *target;
+  if (directory) {
+    target = gg_join(gg_modules_dir(), name);
+  } else {
+    char *leaf = gg_asprintf("%s.lua", name);
+    target = gg_join(gg_modules_dir(), leaf);
+    free(leaf);
+  }
+  if (gg_streq(src, target)) {
+    gg_info("%s %s", gg_tr("module already installed:", "模块已安装:"), name);
+    free(target);
+    free(name);
+    free(src);
+    return 0;
+  }
+  if (gg_exists(target)) {
+    if (!force && (!T.interactive ||
+                   !tui_confirm(gg_tr("replace module?", "覆盖模块?"), target, 0))) {
+      gg_error("%s %s", target,
+               gg_tr("already exists (use -f to replace)", "已存在（用 -f 覆盖）"));
+      free(target);
+      free(name);
+      free(src);
+      return 1;
+    }
+    if (module_remove_tree(target) != 0) {
+      gg_error("%s %s", gg_tr("could not replace", "无法覆盖"), target);
+      free(target);
+      free(name);
+      free(src);
+      return 1;
+    }
+  }
+  int rc = directory ? module_copy_tree(src, target)
+                     : gg_copy_file(src, target);
+  if (rc != 0) {
+    module_remove_tree(target);
+    gg_error("%s %s", gg_tr("could not install module from", "无法安装模块:"), src);
+    free(target);
+    free(name);
+    free(src);
+    return 1;
+  }
+  modules_rescan();
+  gg_ok("%s %s %s", gg_tr("installed module", "已安装模块"), name, target);
+  free(target);
+  free(name);
+  free(src);
+  return 0;
+}
+
 int cmd_modules(int argc, char **argv) {
+  if (argc >= 1 && gg_streq(argv[0], "install")) {
+    const char *source = 0;
+    int force = 0;
+    for (int i = 1; i < argc; i++) {
+      if (arg_is_flag(argv[i], "-f", "--force")) force = 1;
+      else if (!source) source = argv[i];
+    }
+    if (!source) {
+      gg_error("%s", gg_tr("usage: gg modules install <file.lua|directory> [-f]",
+                           "用法: gg modules install <文件.lua|目录> [-f]"));
+      return 1;
+    }
+    return modules_install_source(source, force);
+  }
   if (argc >= 1 && (gg_streq(argv[0], "install-examples") ||
                     gg_streq(argv[0], "examples"))) {
     int force = 0;

@@ -23,8 +23,11 @@ static void help_top(void) {
          gg_tr("interactive lua", "Lua 交互环境"));
   printf("\n%s%s%s\n", c_bold(), gg_tr("built-ins", "内置命令"), c_reset());
   printf("  %sactive%s [status|off]     %s\n", c_accent(), c_reset(),
-         gg_tr("put ~/.gg/bin on PATH (bash/zsh/fish/powershell/cmd)",
-               "把 ~/.gg/bin 加入 PATH（bash/zsh/fish/powershell/cmd）"));
+         gg_tr("put ~/.gg/bin on PATH and enable shell completion",
+               "把 ~/.gg/bin 加入 PATH 并启用命令补全"));
+  printf("  %scompletion%s [shell]     %s\n", c_accent(), c_reset(),
+         gg_tr("print bash/zsh/fish/PowerShell completion code",
+               "输出 bash/zsh/fish/PowerShell 补全脚本"));
   printf("  %sls%s | %sshow%s <name>      %s\n", c_accent(), c_reset(), c_accent(),
          c_reset(), gg_tr("list / describe everything", "列出 / 查看"));
   printf("  %sadd%s <name> <cmd>        %s\n", c_accent(), c_reset(),
@@ -39,8 +42,10 @@ static void help_top(void) {
          c_reset(), gg_tr("create a shell shim", "创建 shell 快捷命令"));
   printf("  %srun%s <command line>      %s\n", c_accent(), c_reset(),
          gg_tr("run through the shell", "通过 shell 执行"));
+  printf("  %smodules%s install <dir>   %s\n", c_accent(), c_reset(),
+         gg_tr("install a self-contained module folder", "安装自包含模块目录"));
   printf("  %smodules%s install-examples %s\n", c_accent(), c_reset(),
-         gg_tr("copy the bundled modules", "安装自带示例模块"));
+         gg_tr("copy the bundled example modules", "安装自带示例模块"));
   printf("  %sdoctor%s | %sconfig%s | %supgrade%s\n", c_accent(), c_reset(),
          c_accent(), c_reset(), c_accent(), c_reset());
   printf("  %shelp%s <topic>             %s\n", c_accent(), c_reset(),
@@ -56,9 +61,10 @@ static void help_topic(const char *topic) {
   if (gg_streq(topic, "modules") || gg_streq(topic, "module")) {
     printf("%s%s%s\n\n", c_bold(), gg_tr("writing a module", "编写模块"), c_reset());
     printf("%s\n", gg_tr(
-        "A module is a lua file in ~/.gg/modules/<name>.lua that returns a\n"
-        "table.  Give it a title, a description, optional params and either a\n"
-        "run(ctx) function or an actions list.\n\n"
+        "A module may be one file, ~/.gg/modules/<name>.lua, or a self-contained\n"
+        "folder at ~/.gg/modules/<name>/ with <name>.lua or init.lua plus its\n"
+        "own helper files and assets. It returns a table with a title, optional\n"
+        "params, and either run(ctx) or an actions list.\n\n"
         "    local M = {}\n"
         "    M.title = \"my tool\"\n"
         "    M.desc  = \"does something useful\"\n"
@@ -75,10 +81,13 @@ static void help_topic(const char *topic) {
         "      return 0\n"
         "    end\n"
         "    return M\n",
-        "模块就是 ~/.gg/modules/<名字>.lua，返回一个表。写 M.title / M.desc /\n"
-        "M.params 以及 M.run(ctx)；如果想要自己的界面就再加一个 M.tui(ctx)。\n"
+        "模块可以是 ~/.gg/modules/<名字>.lua 单文件，也可以是自包含目录\n"
+        "~/.gg/modules/<名字>/，里面放 <名字>.lua 或 init.lua 以及自己的辅助文件/资源。\n"
+        "模块返回一个表，写 M.title / M.desc / M.params 以及 M.run(ctx)；\n"
+        "ctx.module_dir 指向模块目录，方便读取随模块分发的文件。\n"
         "常用字段见 examples/ 目录：\n"
         "  ctx.args.<name>   解析后的参数\n"
+        "  ctx.module_dir    自包含模块目录的绝对路径（普通单文件模块也可用）\n"
         "  ctx.rest          多余的位置参数数组\n"
         "  ctx.run{...}      前台运行子进程（TUI 会自动让出终端）\n"
         "  ctx.capture(cmd)  捕获输出\n"
@@ -132,7 +141,7 @@ static void help_topic(const char *topic) {
         "gg.join_path{...} / abs / basename", "path helpers",
         "gg.trim/split/join/quote", "string helpers",
         "gg.json.encode / gg.json.decode", "json in and out",
-        "gg.getenv/setenv", "environment",
+        "gg.getenv/setenv/refresh_tools", "environment and PATH cache",
         "gg.log/info/warn/err/ok/print", "output helpers",
         "gg.i18n(en, zh)", "pick text by language",
         "gg.style(name) / gg.colorize(text, name)", "ansi colors",
@@ -199,7 +208,8 @@ static void help_topic(const char *topic) {
     printf("  s / r / ?   %s\n", gg_tr("setup PATH / reload / help",
                                       "配置 PATH / 刷新 / 帮助"));
     printf("  q           %s\n", gg_tr("quit", "退出"));
-    printf("  /           %s\n", gg_tr("type to filter at any time", "随时输入即过滤"));
+    printf("  / / tab     %s\n", gg_tr("focus the filter; esc clears/unfocuses, esc again backs out",
+                                      "聚焦过滤框；Esc 清空并取消焦点，再按 Esc 返回"));
   } else {
     help_top();
   }
@@ -231,6 +241,11 @@ typedef struct {
   int n, cap;
 } dash_list;
 
+static void dash_clear(dash_list *l) {
+  for (int i = 0; i < l->n; i++) dash_item_free(&l->v[i]);
+  l->n = 0;
+}
+
 static dash_item *dash_push(dash_list *l) {
   if (l->n + 1 > l->cap) {
     l->cap = l->cap ? l->cap * 2 : 32;
@@ -242,7 +257,7 @@ static dash_item *dash_push(dash_list *l) {
 }
 
 static void dash_build(dash_list *l) {
-  l->n = 0;
+  dash_clear(l);
   /* quick actions */
   {
     dash_item *it = dash_push(l);
@@ -330,6 +345,74 @@ static int dash_match(dash_item *it, const char *filter) {
     }
   }
   return 0;
+}
+
+static int dash_prefix_match(const char *text, const char *prefix) {
+  if (!text || !prefix || !*prefix) return 0;
+  while (*prefix) {
+    if (!*text || tolower((unsigned char)*text) !=
+                      tolower((unsigned char)*prefix))
+      return 0;
+    text++;
+    prefix++;
+  }
+  return 1;
+}
+
+static int dash_best_match(dash_list *list, const char *filter) {
+  if (!filter || !*filter) return list->n ? 0 : -1;
+  for (int i = 0; i < list->n; i++) {
+    dash_item *it = &list->v[i];
+    if (dash_prefix_match(it->name, filter) ||
+        dash_prefix_match(it->title, filter))
+      return i;
+  }
+  for (int i = 0; i < list->n; i++)
+    if (dash_match(&list->v[i], filter)) return i;
+  return -1;
+}
+
+static int dash_visible_count(dash_list *list, const char *filter) {
+  int count = 0;
+  for (int i = 0; i < list->n; i++)
+    if (dash_match(&list->v[i], filter)) count++;
+  return count;
+}
+
+static int dash_visible_at(dash_list *list, const char *filter, int nth) {
+  int seen = 0;
+  for (int i = 0; i < list->n; i++) {
+    if (!dash_match(&list->v[i], filter)) continue;
+    if (seen++ == nth) return i;
+  }
+  return -1;
+}
+
+static int dash_visible_nth(dash_list *list, const char *filter, int index) {
+  int seen = 0;
+  for (int i = 0; i < list->n; i++) {
+    if (!dash_match(&list->v[i], filter)) continue;
+    if (i == index) return seen;
+    seen++;
+  }
+  return 0;
+}
+
+static int dash_step(dash_list *list, const char *filter, int index, int delta) {
+  int nth = dash_visible_nth(list, filter, index) + delta;
+  int count = dash_visible_count(list, filter);
+  if (count <= 0) return index;
+  if (nth < 0) nth = 0;
+  if (nth >= count) nth = count - 1;
+  int next = dash_visible_at(list, filter, nth);
+  return next >= 0 ? next : index;
+}
+
+static long long dash_clock_ms(void) {
+  struct timespec ts;
+  if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+  return (long long)time(0) * 1000;
 }
 
 static const char *kind_label(int kind) {
@@ -443,6 +526,9 @@ int cmd_dashboard(void) {
   memset(&list, 0, sizeof(list));
   dash_build(&list);
   int sel = 0, scroll = 0;
+  int filter_on = 1;
+  int last_click = -1;
+  long long last_click_ms = 0;
   char filter[128] = "";
   const char *status = 0;
 
@@ -478,25 +564,16 @@ int cmd_dashboard(void) {
     if (listw > 46) listw = 46;
     int detailx = listw + 3;
     int detailw = T.w - detailx - 1;
-    int rows = T.h - 4;
+    int rows = T.h - 5;
+    if (rows < 1) rows = 1;
 
     /* filtered navigation */
-    int vis = 0;
-    for (int i = 0; i < list.n; i++)
-      if (dash_match(&list.v[i], filter)) vis++;
+    int vis = dash_visible_count(&list, filter);
     if (sel >= list.n) sel = list.n - 1;
     if (sel < 0) sel = 0;
-    /* index of sel within the filtered view */
-    int nth = 0, seen = 0;
-    for (int i = 0; i < list.n; i++) {
-      if (dash_match(&list.v[i], filter)) {
-        if (i == sel) {
-          nth = seen;
-          break;
-        }
-        seen++;
-      }
-    }
+    if (vis > 0 && !dash_match(&list.v[sel], filter))
+      sel = dash_best_match(&list, filter);
+    int nth = dash_visible_nth(&list, filter, sel);
     if (nth < scroll) scroll = nth;
     if (nth >= scroll + rows) scroll = nth - rows + 1;
     if (scroll < 0) scroll = 0;
@@ -556,7 +633,13 @@ int cmd_dashboard(void) {
       sb_adds(b, T.utf8 ? "\u2502" : "|");
       sb_adds(b, ST_RESET);
     }
-    if (list.n) dash_detail(b, 3, detailx, detailw, &list.v[sel]);
+    if (vis > 0) dash_detail(b, 3, detailx, detailw, &list.v[sel]);
+    else {
+      tui_at(b, 3, detailx);
+      sb_adds(b, tui_style(ST_MUTED));
+      sb_adds(b, gg_tr("no matching items", "没有匹配项"));
+      sb_adds(b, ST_RESET);
+    }
 
     /* filter + footer */
     tui_hline(b, T.h - 2, 1, T.w, tui_style(ST_DIM));
@@ -567,9 +650,13 @@ int cmd_dashboard(void) {
     sb_adds(b, gg_tr("filter:", "过滤:"));
     sb_adds(b, ST_RESET);
     sb_adds(b, " ");
-    sb_adds(b, tui_style(ST_ACCENT));
+    sb_adds(b, filter_on ? tui_style(ST_ACCENT) : tui_style(ST_DIM));
     sb_adds(b, filter);
     sb_adds(b, ST_RESET);
+    sb_addf(b, "%s  [%s]%s", tui_style(ST_DIM),
+            filter_on ? gg_tr("tab: list", "Tab: 列表")
+                      : gg_tr("tab: filter", "Tab: 过滤"),
+            ST_RESET);
     if (status) {
       tui_at(b, T.h - 1, T.w - (int)gg_width(status) - 2);
       sb_adds(b, tui_style(ST_WARN));
@@ -580,42 +667,100 @@ int cmd_dashboard(void) {
     sb_adds(b, "\033[K");
     sb_adds(b, " ");
     sb_adds(b, tui_style(ST_MUTED));
-    sb_adds(b, gg_tr("↑↓ move  ⏎ run  e edit  n new  a add  d delete  l link  "
-                     "s setup  r reload  ? help  q quit",
-                     "↑↓ 移动  ⏎ 运行  e 编辑  n 新建  a 添加  d 删除  l 快捷方式  "
-                     "s 配置  r 刷新  ? 帮助  q 退出"));
+    sb_adds(b, gg_tr("↑↓ move  enter run  e edit  n new  a add  d delete  "
+                     "l link  s setup  r reload  ? help  q quit  tab focus",
+                     "↑↓ 移动  回车运行  e 编辑  n 新建  a 添加  d 删除  "
+                     "l 快捷方式  s 配置  r 刷新  ? 帮助  q 退出  Tab 切换焦点"));
     sb_adds(b, ST_RESET);
-    tui_at(b, T.h - 1, 9 + (int)gg_width(filter));
-    sb_adds(b, GG_CUR_SHOW);
+    if (filter_on) {
+      tui_at(b, T.h - 1, 9 + (int)gg_width(filter));
+      sb_adds(b, GG_CUR_SHOW);
+    } else {
+      sb_adds(b, GG_CUR_HIDE);
+    }
     tui_flush(b);
 
     int k = tui_key(-1);
     status = 0;
     if (k == KEY_NONE) continue;
-    if (k == KEY_UP || k == 'k') {
-      do {
-        if (sel > 0) sel--;
-      } while (sel > 0 && !dash_match(&list.v[sel], filter));
-      scroll = scroll > 0 && nth <= scroll ? scroll - 1 : scroll;
-    } else if (k == KEY_DOWN || k == 'j') {
-      do {
-        if (sel + 1 < list.n) sel++;
-      } while (sel + 1 < list.n && !dash_match(&list.v[sel], filter));
+    if (k == KEY_MOUSE) {
+      if (T_MOUSE.wheel && T_MOUSE.y >= 3 && T_MOUSE.y <= T.h - 3) {
+        sel = dash_step(&list, filter, sel, -T_MOUSE.wheel * 3);
+      } else if (T_MOUSE.pressed && T_MOUSE.button == 0) {
+        if (T_MOUSE.y == T.h - 1) {
+          filter_on = 1;
+        } else if (T_MOUSE.y >= 3 && T_MOUSE.y <= T.h - 3) {
+          int idx = dash_visible_at(&list, filter,
+                                    scroll + T_MOUSE.y - 3);
+          if (idx >= 0) {
+            long long now = dash_clock_ms();
+            filter_on = 0;
+            if (idx == last_click && now - last_click_ms <= 450) {
+              dash_run_item(&list.v[idx]);
+              dash_build(&list);
+              last_click = -1;
+            } else {
+              sel = idx;
+              last_click = idx;
+              last_click_ms = now;
+            }
+          }
+        }
+      }
+      continue;
+    }
+    if (k == KEY_UP || (!filter_on && k == 'k')) {
+      sel = dash_step(&list, filter, sel, -1);
+    } else if (k == KEY_DOWN || (!filter_on && k == 'j')) {
+      sel = dash_step(&list, filter, sel, 1);
+    } else if (k == KEY_HOME || (!filter_on && k == 'g')) {
+      if (vis > 0) sel = dash_visible_at(&list, filter, 0);
+      scroll = 0;
+    } else if (k == KEY_END || (!filter_on && k == 'G')) {
+      if (vis > 0) sel = dash_visible_at(&list, filter, vis - 1);
     } else if (k == KEY_PGUP) {
-      sel -= rows;
-      if (sel < 0) sel = 0;
+      int target = dash_visible_nth(&list, filter, sel) - rows;
+      if (target < 0) target = 0;
+      int idx = dash_visible_at(&list, filter, target);
+      if (idx >= 0) sel = idx;
     } else if (k == KEY_PGDN) {
-      sel += rows;
-      if (sel >= list.n) sel = list.n - 1;
+      int target = dash_visible_nth(&list, filter, sel) + rows;
+      if (target >= vis) target = vis - 1;
+      int idx = dash_visible_at(&list, filter, target);
+      if (idx >= 0) sel = idx;
     } else if (k == KEY_BACKSPACE) {
-      if (filter[0]) filter[gg_utf8_prev(filter, strlen(filter))] = 0;
+      if (filter_on && filter[0])
+        filter[gg_utf8_prev(filter, strlen(filter))] = 0;
     } else if (k == KEY_ESC) {
+      if (filter_on) {
+        if (filter[0]) filter[0] = 0;
+        filter_on = 0;
+      } else if (filter[0]) {
+        filter[0] = 0;
+      } else {
+        break;
+      }
+    } else if (k == KEY_TAB || k == KEY_SHIFT_TAB) {
+      filter_on = !filter_on;
+    } else if (k == KEY_ENTER) {
+      if (vis > 0) dash_run_item(&list.v[sel]);
+      dash_build(&list);
+    } else if (filter_on && k >= 32 && k < KEY_UP) {
+      size_t n = strlen(filter);
+      char tmp[4];
+      int nb = gg_utf8_encode((uint32_t)k, tmp);
+      if (n + (size_t)nb < sizeof(filter) - 1) {
+        memcpy(filter + n, tmp, (size_t)nb);
+        filter[n + (size_t)nb] = 0;
+      }
+      int first = dash_best_match(&list, filter);
+      if (first >= 0) sel = first;
+    } else if (!filter_on && k == '/') {
+      filter_on = 1;
+    } else if (!filter_on && k == 'q') {
       if (filter[0]) filter[0] = 0;
       else break;
-    } else if (k == KEY_ENTER) {
-      if (list.n) dash_run_item(&list.v[sel]);
-      dash_build(&list);
-    } else if (k == 'e') {
+    } else if (!filter_on && k == 'e') {
       if (sel >= 0 && sel < list.n) {
         dash_item *it = &list.v[sel];
         strvec args;
@@ -625,11 +770,11 @@ int cmd_dashboard(void) {
         sv_free(&args);
         dash_build(&list);
       }
-    } else if (k == 'n') {
+    } else if (!filter_on && k == 'n') {
       if (cmd_init(0, 0) == 0) dash_build(&list);
-    } else if (k == 'a') {
+    } else if (!filter_on && k == 'a') {
       if (cmd_add(0, 0) == 0) dash_build(&list);
-    } else if (k == 'd') {
+    } else if (!filter_on && k == 'd') {
       if (sel >= 0 && sel < list.n) {
         dash_item *it = &list.v[sel];
         strvec args;
@@ -640,7 +785,7 @@ int cmd_dashboard(void) {
         dash_build(&list);
         if (sel >= list.n) sel = list.n ? list.n - 1 : 0;
       }
-    } else if (k == 'l') {
+    } else if (!filter_on && k == 'l') {
       if (sel >= 0 && sel < list.n) {
         strvec args;
         sv_init(&args);
@@ -649,42 +794,22 @@ int cmd_dashboard(void) {
         sv_free(&args);
         status = gg_tr("shim created", "已创建快捷方式");
       }
-    } else if (k == 's') {
-      tui_leave();
+    } else if (!filter_on && k == 's') {
+      tui_suspend();
       cmd_active(0, 0);
       gg_pause_key(0);
-      tui_enter();
-    } else if (k == 'r') {
+      tui_resume();
+    } else if (!filter_on && k == 'r') {
       reg_reload();
-      modules_scan();
+      modules_rescan();
       dash_build(&list);
       status = gg_tr("reloaded", "已刷新");
-    } else if (k == '?') {
-      tui_leave();
+    } else if (!filter_on && k == '?') {
+      tui_suspend();
       printf("\n");
       help_topic("commands");
       gg_pause_key(0);
-      tui_enter();
-    } else if (k == 'q') {
-      if (filter[0]) filter[0] = 0;
-      else break;
-    } else if (k == KEY_TAB) {
-      /* cycle between modules and commands by filtering */
-    } else if (k >= 32 && k < KEY_UP) {
-      size_t n = strlen(filter);
-      char tmp[4];
-      int nb = gg_utf8_encode((uint32_t)k, tmp);
-      if (n + (size_t)nb < sizeof(filter) - 1) {
-        memcpy(filter + n, tmp, (size_t)nb);
-        filter[n + (size_t)nb] = 0;
-      }
-      /* jump to the first match */
-      for (int i = 0; i < list.n; i++) {
-        if (dash_match(&list.v[i], filter)) {
-          sel = i;
-          break;
-        }
-      }
+      tui_resume();
     }
   }
   tui_leave();
@@ -696,19 +821,19 @@ int cmd_dashboard(void) {
 static void dash_run_item(dash_item *it) {
   if (it->kind == 0) {
     if (gg_streq(it->name, "__setup")) {
-      tui_leave();
+      tui_suspend();
       cmd_active(0, 0);
       gg_pause_key(0);
-      tui_enter();
+      tui_resume();
     } else if (gg_streq(it->name, "__doctor")) {
-      tui_leave();
+      tui_suspend();
       cmd_doctor(0, 0);
       gg_pause_key(0);
-      tui_enter();
+      tui_resume();
     } else if (gg_streq(it->name, "__new")) {
-      tui_leave();
-      tui_enter(); /* keep widgets in alt screen */
+      tui_suspend();
       cmd_init(0, 0);
+      tui_resume();
     } else if (gg_streq(it->name, "__add")) {
       cmd_add(0, 0);
     }
@@ -826,6 +951,8 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (gg_streq(cmd, "version")) return cmd_version();
+  if (gg_streq(cmd, "completion")) return cmd_completion(restc, rest);
+  if (gg_streq(cmd, "__complete")) return cmd_complete(restc, rest);
   if (gg_streq(cmd, "active")) return cmd_active(restc, rest);
   if (gg_streq(cmd, "deactivate") || gg_streq(cmd, "disable")) {
     char *a[2] = {(char *)"off", 0};

@@ -152,8 +152,9 @@ char *gg_ext_of(const char *path);
 
 const char *gg_exe_path(void);         /* path to the running binary */
 int gg_glob_match(const char *pat, const char *str); /* * and ? only */
-const char *gg_which(const char *name); /* cached, returns "" when missing */
+const char *gg_which(const char *name); /* cached, returns NULL when missing */
 int gg_have(const char *name);          /* gg_which != NULL */
+void gg_which_clear(void);              /* forget cached PATH results */
 
 /* ------------------------------------------------------------------ */
 /* terminal / TUI                                                      */
@@ -181,6 +182,7 @@ enum {
   KEY_F1 = 0x120,
   KEY_CTRL_SHIFT_HOME,
   KEY_SHIFT_TAB,
+  KEY_MOUSE,
 };
 
 typedef struct {
@@ -196,7 +198,16 @@ typedef struct {
   int saved_ok;
 } tui_state;
 
+typedef struct {
+  int x, y;          /* 1-based terminal coordinates */
+  int button;        /* 0 = left, 1 = middle, 2 = right */
+  int pressed;       /* press event (release is reported as 0) */
+  int wheel;         /* +1 up, -1 down, 0 otherwise */
+  int shift, alt, ctrl;
+} tui_mouse_event;
+
 extern tui_state T;
+extern tui_mouse_event T_MOUSE;
 extern sbuf G_FRAME; /* scratch render buffer */
 
 void tui_probe(void);      /* fill T.*, decide interactivity  */
@@ -204,6 +215,8 @@ int tui_init(void);        /* probe + install atexit restore  */
 void tui_restore(void);
 void tui_enter(void);      /* alt screen + raw mode + cursor  */
 void tui_leave(void);
+void tui_suspend(void);    /* temporarily restore terminal for a child process */
+void tui_resume(void);
 void tui_size(void);       /* refresh T.w/T.h                 */
 void tui_flush(sbuf *b);   /* write buffer to stdout          */
 void tui_clear(sbuf *b);
@@ -427,6 +440,8 @@ int cmd_link(int argc, char **argv);
 int cmd_unlink(int argc, char **argv);
 int cmd_exec(int argc, char **argv);
 int cmd_dashboard(void);
+int cmd_completion(int argc, char **argv);
+int cmd_complete(int argc, char **argv);
 int cmd_version(void);
 
 /* localization: pick zh when the user asks for it */

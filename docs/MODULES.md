@@ -1,6 +1,7 @@
 # gg modules · gg 模块开发指南
 
-一个模块 = `~/.gg/modules/<名字>.lua` 里的一个 Lua 文件，`return` 一个表。
+一个模块可以是 `~/.gg/modules/<名字>.lua` 单文件，也可以是
+`~/.gg/modules/<名字>/` 自包含目录（入口为 `<名字>.lua` 或 `init.lua`，旁边可放 helper 和 assets），入口文件 `return` 一个表。
 `gg <名字>` 会加载它；不带参数运行时，gg 会把参数表变成 TUI 表单。
 
 ```lua
@@ -17,6 +18,30 @@ return M
 内置示例（`gg modules install-examples` 可落盘到 `~/.gg/modules`）：
 `hello.lua`（最小示例）、`aria2c.lua`（参数 + 自定义 TUI）、`apt.lua`（动作菜单 + 自动识别包管理器）、
 `demo.lua`（各个 TUI 组件演示）。
+
+### 自包含模块目录
+
+将模块入口、helper 和静态资源放在同一目录，发布/安装时保持整个目录结构：
+
+```text
+mytool/
+  mytool.lua       # 或 init.lua
+  lib.lua
+  assets/data.json
+```
+
+```lua
+function M.run(ctx)
+  local helper = dofile(gg.join_path(ctx.module_dir, "lib.lua"))
+  local data = gg.read(gg.join_path(ctx.module_dir, "assets", "data.json"))
+  return helper.run(data)
+end
+```
+
+从项目目录安装：`gg modules install ./mytool`；安装器会复制整棵目录到
+`~/.gg/modules/mytool`。`gg rm mytool` 会确认后删除整个目录。`ctx.module_dir`
+是模块入口文件所在目录；普通单文件模块也会得到其父目录。模块目录不依赖额外的 gg 模块或项目路径，
+因此可独立复制给另一台已安装 gg 的机器。需要连 gg/Lua 运行时一起分发时，使用 README 中的 `gg bundle`。
 
 ---
 
@@ -199,7 +224,7 @@ M.params = {
 `gg.exists` `gg.is_dir` `gg.is_file` `gg.mkdir` `gg.read` `gg.write` `gg.list(dir[, full_path])`
 `gg.stat`（`size/mtime/is_dir/is_file`）`gg.rm(path[, {recursive=true}])` `gg.copy` `gg.move`
 `gg.chmod_x` `gg.mkstemp(suffix)` `gg.join_path` `gg.abs` `gg.basename` `gg.dirname` `gg.ext`
-`gg.cwd()` `gg.getenv/setenv` `gg.which(name)` `gg.have(name)` `gg.sleep(秒)` `gg.now()`
+`gg.cwd()` `gg.getenv/setenv` `gg.which(name)` `gg.have(name)` `gg.refresh_tools()`（清除已缓存的 PATH 检测，例如安装程序后）`gg.sleep(秒)` `gg.now()`
 
 ### 文本与数据
 
